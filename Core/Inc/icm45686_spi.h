@@ -7,10 +7,13 @@
  *          Архитектура DMA-опроса:
  *          ┌─────────────────────────────────────────────────────┐
  *          │  TIM6 (прерывание каждые ~3.125 мс при 3200 Гц)     │
- *          │  → запускает ICM_StartBurstRead_SPI1()              │
- *          │  → DMA1 RX TC ISR → запускает SPI4                  │
- *          │  → DMA2 RX TC ISR (SPI4) → запускает SPI5           │
- *          │  → DMA2 RX TC ISR (SPI5) → вызывает обработчик данных│
+ *          │  → запускает ICM_StartBurstRead()                   │
+ *          │  → DMA1 RX TC ISR → ICM_DMA_RxComplete_SPI1()       │
+ *          │     (6 датчиков SPI1 по очереди)                    │
+ *          │  → DMA2 RX TC ISR → ICM_DMA_RxComplete_SPI4()       │
+ *          │     (6 датчиков SPI4 по очереди)                    │
+ *          │  → DMA2 RX TC ISR → ICM_DMA_RxComplete_SPI5()       │
+ *          │     (6 датчиков SPI5 по очереди) → g_fifo_batch_ready│
  *          └─────────────────────────────────────────────────────┘
  *
  *          На каждой шине 6 датчиков опрашиваются ПОСЛЕДОВАТЕЛЬНО
@@ -53,16 +56,15 @@ typedef struct {
     /* TX-буфер: команда чтения FIFO + dummy-байты */
     uint8_t  tx_buf[ICM_FIFO_DMA_BUF_SIZE] __attribute__((aligned(4)));
 
-    /* RX-буфер не используется напрямую — данные идут в g_fifo_data */
     volatile uint8_t  transfer_complete;        /* Флаг завершения последнего датчика шины */
 } ICM_Bus_t;
 
 /* ================================================================
  * Глобальные дескрипторы трёх шин
  * ================================================================ */
-extern ICM_Bus_t g_bus_spi1;  /* SPI1: датчики 13..18 (индексы 0..5)  */
-extern ICM_Bus_t g_bus_spi4;  /* SPI4: датчики  1.. 6 (индексы 0..5)  */
-extern ICM_Bus_t g_bus_spi5;  /* SPI5: датчики  7..12 (индексы 0..5)  */
+extern ICM_Bus_t g_bus_spi1;  /* SPI1: датчики  0.. 5 */
+extern ICM_Bus_t g_bus_spi4;  /* SPI4: датчики  6..11 */
+extern ICM_Bus_t g_bus_spi5;  /* SPI5: датчики 12..17 */
 
 /* ================================================================
  * Флаг готовности новой пачки данных (устанавливается в ISR)
@@ -70,8 +72,7 @@ extern ICM_Bus_t g_bus_spi5;  /* SPI5: датчики  7..12 (индексы 0..
 extern volatile uint8_t g_fifo_batch_ready;  /* =1 когда все 3 шины завершили цикл */
 
 /* ================================================================
- * Сырые данные FIFO: [шина][датчик на шине][байт]
- * bus_idx: 0=SPI1, 1=SPI4, 2=SPI5
+ * Сырые данные FIFO: [шина 0=SPI1 / 1=SPI4 / 2=SPI5][датчик 0..5][байт]
  * ================================================================ */
 extern uint8_t g_fifo_data[3][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE];
 
@@ -88,29 +89,34 @@ void ICM_BusesInit(void);
 /**
  * @brief  Инициализация всех 18 датчиков ICM-45686.
  *         Выполняет: сброс, WHO_AM_I, конфигурацию PWR/ODR/FS/FIFO.
- * @retval 0 — успех, ненулевое — номер датчика, на котором сбой
+ * @retval 0 — успех, ненулевое — номер датчика (1-based), на котором сбой
  */
 uint8_t ICM_InitAllSensors(void);
 
 /**
- * @brief  Запуск DMA-чтения FIFO на шине SPI1 (первый шаг каскада).
- *         Вызывать из TIM6 ISR каждые 3.125 мс.
+ * @brief  Запуск DMA-чтения FIFO (единая точка входа из TIM6 ISR).
+ *         Запускает SPI1, далее каскад продолжается через ISR.
+ */
+void ICM_StartBurstRead(void);
+
+/**
+ * @brief  Псевдоним ICM_StartBurstRead() для обратной совместимости.
+ *         Оба имени указывают на одну и ту же реализацию.
  */
 void ICM_StartBurstRead_SPI1(void);
 
 /**
- * @brief  Вызывается из DMA-ISR SPI1 RX TC — запускает следующий датчик
- *         SPI1 или переходит к SPI4.
+ * @brief  Вызывается из DMA1_Stream2 ISR (SPI1 RX TC).
  */
 void ICM_DMA_RxComplete_SPI1(void);
 
 /**
- * @brief  Вызывается из DMA-ISR SPI4 RX TC.
+ * @brief  Вызывается из DMA2_Stream0 ISR (SPI4 RX TC).
  */
 void ICM_DMA_RxComplete_SPI4(void);
 
 /**
- * @brief  Вызывается из DMA-ISR SPI5 RX TC.
+ * @brief  Вызывается из DMA2_Stream2 ISR (SPI5 RX TC).
  */
 void ICM_DMA_RxComplete_SPI5(void);
 
