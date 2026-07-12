@@ -22,7 +22,13 @@
  *          15    Timestamp MSB
  *
  *          Первые 2 байта RX-буфера DMA — служебные (адрес+dummy),
- *          поэтому данные начинаются с offset +2 от начала g_fifo_data[b][s].
+ *          поэтому данные начинаются с offset +1 от начала g_fifo_data[b][s].
+ *
+ *          Неисправные датчики (g_sensor_fault_mask):
+ *          ICM_ParseAllFIFO() записывает нули во все поля g_sensor_batches
+ *          для таких датчиков и выставляет count = 0.
+ *          ПК-сторона видит нулевые данные и может определить fault
+ *          по count == 0 или по маске в заголовке пакета.
  */
 
 #include "icm45686_data.h"
@@ -36,20 +42,19 @@
 ICM_SensorBatch_t g_sensor_batches[ICM_TOTAL_SENSORS];
 
 /* ================================================================
- * ICM_ParseFIFOBuffer — разбор буфера одного датчика
+ * ICM_ParseFIFOBuffer — разбор буфера одного ИСПРАВНОГО датчика
  * ================================================================ */
 void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
                          uint16_t       buf_len,
                          ICM_SensorBatch_t *batch)
 {
-    uint16_t offset = 0U;
+    uint16_t offset  = 0U;
     uint8_t  pkt_cnt = 0U;
     uint8_t  header;
     const uint8_t *pkt;
 
     batch->count = 0U;
 
-    /* Пробегаем по буферу пакет за пакетом */
     while ((offset + (uint16_t)ICM45686_FIFO_PACKET_SIZE_16BIT) <= buf_len)
     {
         pkt    = &raw_buf[offset];
@@ -82,7 +87,7 @@ void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
                 pkt_cnt++;
             }
         }
-        /* Если header == 0x80 — пустой пакет-заглушка, просто пропускаем */
+        /* Header == 0x80 — пустой пакет-заглушка, пропускаем */
 
         offset += (uint16_t)ICM45686_FIFO_PACKET_SIZE_16BIT;
     }
@@ -91,17 +96,22 @@ void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
 }
 
 /* ================================================================
- * ICM_ParseAllFIFO — разбор всех 18 датчиков
+ * ICM_ParseAllFIFO — разбор всех 18 датчиков.
+ *
+ * Для датчиков с fault=1 (бит установлен в g_sensor_fault_mask):
+ *   - все samples обнуляются через memset
+ *   - count = 0
+ * Это гарантирует, что в UART-пакете неисправный датчик
+ * всегда виден как нулевые данные.
  * ================================================================ */
 void ICM_ParseAllFIFO(void)
 {
-    uint8_t b, s;
-    uint8_t sensor_id;
-    /* Первые 2 байта RX-буфера — адресный байт + dummy первый байт ответа SPI.
-     * Реальные данные FIFO начинаются с байта [1] (dummy адрес + данные).
-     * Пропускаем первый байт (адрес команды), данные с байта 1.
-     */
-    const uint16_t data_offset = 1U;  /* Пропуск байта адреса команды */
+    uint8_t  b, s;
+    uint8_t  sensor_id;
+    uint32_t fault_mask = g_sensor_fault_mask;  /* Локальная копия — без volatile overhead */
+
+    /* Первый байт RX-буфера — адрес команды (отброшен), данные с байта 1 */
+    const uint16_t data_offset = 1U;
     const uint16_t data_len    = (uint16_t)(ICM_FIFO_DMA_BUF_SIZE - data_offset);
 
     for (b = 0U; b < 3U; b++)
@@ -111,10 +121,22 @@ void ICM_ParseAllFIFO(void)
             sensor_id = (uint8_t)(b * ICM_SENSORS_PER_BUS + s);
             g_sensor_batches[sensor_id].sensor_id = sensor_id;
 
-            ICM_ParseFIFOBuffer(
-                &g_fifo_data[b][s][data_offset],
-                data_len,
-                &g_sensor_batches[sensor_id]);
+            if ((fault_mask & (1UL << sensor_id)) != 0U)
+            {
+                /* Датчик неисправен — заполнить нулями, count = 0.
+                 * ПК видит нулевые данные и count==0 как признак fault. */
+                memset(g_sensor_batches[sensor_id].samples, 0x00,
+                       sizeof(g_sensor_batches[sensor_id].samples));
+                g_sensor_batches[sensor_id].count = 0U;
+            }
+            else
+            {
+                /* Датчик исправен — разобрать FIFO-буфер */
+                ICM_ParseFIFOBuffer(
+                    &g_fifo_data[b][s][data_offset],
+                    data_len,
+                    &g_sensor_batches[sensor_id]);
+            }
         }
     }
 }
