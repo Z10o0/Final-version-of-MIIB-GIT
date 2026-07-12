@@ -22,6 +22,8 @@
 #include "stm32h7xx_it.h"
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
+#include "icm45686_spi.h"
+#include "uart_telemetry.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -217,7 +219,11 @@ void DMA1_Stream0_IRQHandler(void)
 void DMA1_Stream1_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Stream1_IRQn 0 */
-
+	 /* USART1 TX */
+	    if (LL_DMA_IsActiveFlag_TC1(DMA1)) {
+	        LL_DMA_ClearFlag_TC1(DMA1);
+	        UART_DMA_TxComplete();
+	    }
   /* USER CODE END DMA1_Stream1_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream1_IRQn 1 */
 
@@ -230,7 +236,11 @@ void DMA1_Stream1_IRQHandler(void)
 void DMA1_Stream2_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA1_Stream2_IRQn 0 */
-
+	/* SPI1 RX */
+	    if (LL_DMA_IsActiveFlag_TC2(DMA1)) {
+	        LL_DMA_ClearFlag_TC2(DMA1);
+	        ICM_DMA_RxComplete_SPI1();
+	    }
   /* USER CODE END DMA1_Stream2_IRQn 0 */
   /* USER CODE BEGIN DMA1_Stream2_IRQn 1 */
 
@@ -347,7 +357,10 @@ void SPI3_IRQHandler(void)
 void TIM6_DAC_IRQHandler(void)
 {
   /* USER CODE BEGIN TIM6_DAC_IRQn 0 */
-
+	if (LL_TIM_IsActiveFlag_UPDATE(TIM6)) {
+	        LL_TIM_ClearFlag_UPDATE(TIM6);
+	        ICM_StartBurstRead();          /* Запуск каскада DMA */
+	    }
   /* USER CODE END TIM6_DAC_IRQn 0 */
   /* USER CODE BEGIN TIM6_DAC_IRQn 1 */
 
@@ -360,7 +373,11 @@ void TIM6_DAC_IRQHandler(void)
 void DMA2_Stream0_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA2_Stream0_IRQn 0 */
-
+	/* SPI4 RX */
+	    if (LL_DMA_IsActiveFlag_TC0(DMA2)) {
+	        LL_DMA_ClearFlag_TC0(DMA2);
+	        ICM_DMA_RxComplete_SPI4();
+	    }
   /* USER CODE END DMA2_Stream0_IRQn 0 */
   /* USER CODE BEGIN DMA2_Stream0_IRQn 1 */
 
@@ -386,7 +403,11 @@ void DMA2_Stream1_IRQHandler(void)
 void DMA2_Stream2_IRQHandler(void)
 {
   /* USER CODE BEGIN DMA2_Stream2_IRQn 0 */
-
+	/* SPI5 RX */
+	 if (LL_DMA_IsActiveFlag_TC2(DMA2)) {
+	        LL_DMA_ClearFlag_TC2(DMA2);
+	        ICM_DMA_RxComplete_SPI5();
+	    }
   /* USER CODE END DMA2_Stream2_IRQn 0 */
   /* USER CODE BEGIN DMA2_Stream2_IRQn 1 */
 

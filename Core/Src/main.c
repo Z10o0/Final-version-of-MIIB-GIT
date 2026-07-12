@@ -123,13 +123,25 @@ int main(void)
   MX_SPI5_Init();
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
-
+  ICM_BusesInit();
+  if (ICM_InitAllSensors() != 0) { Error_Handler(); }
+  UART_Telemetry_Init();
+  LL_TIM_EnableCounter(TIM7);
+  LL_TIM_SetCounter(TIM7, 0);
+  LL_TIM_EnableCounter(TIM6);
+  LL_TIM_EnableIT_UPDATE(TIM6);
   /* USER CODE END 2 */
 
   /* Infinite loop */
   /* USER CODE BEGIN WHILE */
   while (1)
   {
+	  if (g_fifo_batch_ready)
+	  {
+	          g_fifo_batch_ready = 0;  /* Сброс ДО разбора */
+	          ICM_ParseAllFIFO();
+	          UART_SendBatch();        /* Неблокирующий DMA TX */
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -889,7 +901,7 @@ static void MX_TIM6_Init(void)
   /* USER CODE END TIM6_Init 1 */
   TIM_InitStruct.Prescaler = 274;
   TIM_InitStruct.CounterMode = LL_TIM_COUNTERMODE_UP;
-  TIM_InitStruct.Autoreload = 2499;
+  TIM_InitStruct.Autoreload = 3124;
   LL_TIM_Init(TIM6, &TIM_InitStruct);
   LL_TIM_DisableARRPreload(TIM6);
   LL_TIM_SetTriggerOutput(TIM6, LL_TIM_TRGO_RESET);
