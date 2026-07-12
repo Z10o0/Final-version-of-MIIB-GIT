@@ -137,7 +137,7 @@ int main(void)
    * Возвращает маску неисправных датчиков (uint32_t).
    * 0 = все исправны. При ненулевой маске неисправные датчики
    * будут давать нули в UART-пакете, система продолжает работу. */
-  if (ICM_InitAllSensors() == 0xFFFFFFFFUL)
+  if (ICM_InitAllSensors() == 0xFFFFFFFF)
   {
     /* Все 18 датчиков не ответили — критическая ошибка */
     Error_Handler();
@@ -329,7 +329,7 @@ static void MX_SPI1_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -424,7 +424,7 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -519,7 +519,7 @@ static void MX_SPI3_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -605,7 +605,7 @@ static void MX_SPI4_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -691,7 +691,7 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -784,7 +784,7 @@ static void MX_SPI6_Init(void)
   SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
   SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
