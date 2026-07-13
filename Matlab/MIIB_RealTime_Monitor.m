@@ -31,7 +31,7 @@ fprintf('=== MIIB Real-Time Monitor v2.0 ===\n');
 % -------------------------------------------------------------------------
 %  ПАРАМЕТРЫ — ИЗМЕНЯТЬ ЗДЕСЬ
 % -------------------------------------------------------------------------
-UART_PORT      = 'COM11';          % Порт UART (Windows: 'COM3', Linux: '/dev/ttyUSB0')
+UART_PORT      = 'COM3';          % Порт UART (Windows: 'COM3', Linux: '/dev/ttyUSB0')
 BAUD_RATE      = 5500000;         % Бодрейт
 DISPLAY_SENSORS = [1 2 3 4 5 6]; % Какие датчики показывать (1..18)
 DISPLAY_AXIS   = 'gyro';         % 'gyro' или 'accel'

@@ -79,54 +79,51 @@ static volatile uint8_t g_buses_done_cnt = 0U;
  * SPI4 → датчики  6..11 (bus_idx = 1)
  * SPI5 → датчики 12..17 (bus_idx = 2)
  * ================================================================ */
+
+/* SPI1: датчики CS13..CS18 → PF13,PF14,PE8,PE9,PB13,PB12 */
 ICM_Bus_t g_bus_spi1 = {
-    .spi           = SPI1,
-    .dma           = DMA1,
+    .spi = SPI1, .dma = DMA1,
     .dma_stream_rx = LL_DMA_STREAM_2,
     .dma_stream_tx = LL_DMA_STREAM_3,
-    .current_sensor_idx = 0,
-    .transfer_complete  = 0,
     .sensors = {
-        /* IMU1  */ { SPI1, CS_IMU1_GPIO_Port, CS_IMU1_Pin, 0U,  0U },
-        /* IMU2  */ { SPI1, CS_IMU2_GPIO_Port, CS_IMU2_Pin, 1U,  0U },
-        /* IMU3  */ { SPI1, GPIOD,             CS_IMU3_Pin, 2U,  0U },
-        /* IMU4  */ { SPI1, GPIOD,             CS_IMU4_Pin, 3U,  0U },
-        /* IMU5  */ { SPI1, GPIOG,             CS_IMU5_Pin, 4U,  0U },
-        /* IMU6  */ { SPI1, GPIOG,             CS_IMU6_Pin, 5U,  0U },
+        /* CS13 */ { SPI1, CS31_GPIO_Port, CS31_Pin, 0U, 0U },  /* PF13 */
+        /* CS14 */ { SPI1, CS32_GPIO_Port, CS32_Pin, 1U, 0U },  /* PF14 */
+        /* CS15 */ { SPI1, CS33_GPIO_Port, CS33_Pin, 2U, 0U },  /* PE8  */
+        /* CS16 */ { SPI1, CS34_GPIO_Port, CS34_Pin, 3U, 0U },  /* PE9  */
+        /* CS17 */ { SPI1, CS35_GPIO_Port, CS35_Pin, 4U, 0U },  /* PB13 */
+        /* CS18 */ { SPI1, CS36_GPIO_Port, CS36_Pin, 5U, 0U },  /* PB12 */
     }
 };
 
+
+/* SPI4: датчики CS1..CS6 → PC4,PC5,PG0,PF15,PE10,PE11 */
 ICM_Bus_t g_bus_spi4 = {
-    .spi           = SPI4,
-    .dma           = DMA2,
+    .spi = SPI4, .dma = DMA2,
     .dma_stream_rx = LL_DMA_STREAM_0,
     .dma_stream_tx = LL_DMA_STREAM_1,
-    .current_sensor_idx = 0,
-    .transfer_complete  = 0,
     .sensors = {
-        /* IMU7  */ { SPI4, GPIOE, CS27_Pin, 6U,  0U },
-        /* IMU8  */ { SPI4, GPIOB, CS25_Pin, 7U,  0U },
-        /* IMU9  */ { SPI4, GPIOB, CS26_Pin, 8U,  0U },
-        /* IMU10 */ { SPI4, GPIOE, CS33_Pin, 9U,  0U },
-        /* IMU11 */ { SPI4, GPIOE, CS34_Pin, 10U, 0U },
-        /* IMU12 */ { SPI4, GPIOG, CS28_Pin, 11U, 0U },
+        /* CS1  */ { SPI4, CS19_GPIO_Port, CS19_Pin, 6U,  0U }, /* PC4  */
+        /* CS2  */ { SPI4, CS20_GPIO_Port, CS20_Pin, 7U,  0U }, /* PC5  */
+        /* CS3  */ { SPI4, CS21_GPIO_Port, CS21_Pin, 8U,  0U }, /* PG0  */
+        /* CS4  */ { SPI4, CS22_GPIO_Port, CS22_Pin, 9U,  0U }, /* PF15 */
+        /* CS5  */ { SPI4, CS23_GPIO_Port, CS23_Pin, 10U, 0U }, /* PE10 */
+        /* CS6  */ { SPI4, CS24_GPIO_Port, CS24_Pin, 11U, 0U }, /* PE11 */
     }
 };
 
+
+/* SPI5: датчики CS7..CS12 → PB0,PB1,PE7,PG1,PE14,PE15 */
 ICM_Bus_t g_bus_spi5 = {
-    .spi           = SPI5,
-    .dma           = DMA2,
+    .spi = SPI5, .dma = DMA2,
     .dma_stream_rx = LL_DMA_STREAM_2,
     .dma_stream_tx = LL_DMA_STREAM_3,
-    .current_sensor_idx = 0,
-    .transfer_complete  = 0,
     .sensors = {
-        /* IMU13 */ { SPI5, GPIOF, CS31_Pin, 12U, 0U },
-        /* IMU14 */ { SPI5, GPIOF, CS32_Pin, 13U, 0U },
-        /* IMU15 */ { SPI5, GPIOE, CS29_Pin, 14U, 0U },
-        /* IMU16 */ { SPI5, GPIOE, CS30_Pin, 15U, 0U },
-        /* IMU17 */ { SPI5, GPIOE, CS23_Pin, 16U, 0U },
-        /* IMU18 */ { SPI5, GPIOE, CS24_Pin, 17U, 0U },
+        /* CS7  */ { SPI5, CS25_GPIO_Port, CS25_Pin, 12U, 0U }, /* PB0  */
+        /* CS8  */ { SPI5, CS26_GPIO_Port, CS26_Pin, 13U, 0U }, /* PB1  */
+        /* CS9  */ { SPI5, CS27_GPIO_Port, CS27_Pin, 14U, 0U }, /* PE7  */
+        /* CS10 */ { SPI5, CS28_GPIO_Port, CS28_Pin, 15U, 0U }, /* PG1  */
+        /* CS11 */ { SPI5, CS29_GPIO_Port, CS29_Pin, 16U, 0U }, /* PE14 */
+        /* CS12 */ { SPI5, CS30_GPIO_Port, CS30_Pin, 17U, 0U }, /* PE15 */
     }
 };
 
