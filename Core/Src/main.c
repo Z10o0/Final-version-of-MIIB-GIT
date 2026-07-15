@@ -346,10 +346,10 @@ static void MX_SPI1_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
-  SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -458,10 +458,10 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
-  SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -570,10 +570,10 @@ static void MX_SPI3_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
-  SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -673,10 +673,10 @@ static void MX_SPI4_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
-  SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -776,10 +776,10 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
-  SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -884,10 +884,10 @@ static void MX_SPI6_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;
-  SPI_InitStruct.ClockPhase = LL_SPI_PHASE_2EDGE;
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -960,7 +960,7 @@ static void MX_TIM7_Init(void)
   /* USER CODE END TIM7_Init 1 */
   TIM_InitStruct.Prescaler = 274;
   TIM_InitStruct.CounterMode = LL_TIM_COUNTERMODE_UP;
-  TIM_InitStruct.Autoreload = 3124;
+  TIM_InitStruct.Autoreload = 0xFFFF;
   LL_TIM_Init(TIM7, &TIM_InitStruct);
   LL_TIM_DisableARRPreload(TIM7);
   LL_TIM_SetTriggerOutput(TIM7, LL_TIM_TRGO_RESET);
@@ -1172,19 +1172,19 @@ static void MX_GPIO_Init(void)
   LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOD);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOC, CS19_Pin|CS20_Pin);
+  LL_GPIO_SetOutputPin(GPIOC, CS19_Pin|CS20_Pin);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOB, CS25_Pin|CS26_Pin|CS36_Pin|CS35_Pin);
+  LL_GPIO_SetOutputPin(GPIOB, CS25_Pin|CS26_Pin|CS36_Pin|CS35_Pin);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOF, CS31_Pin|CS32_Pin|CS22_Pin);
+  LL_GPIO_SetOutputPin(GPIOF, CS31_Pin|CS32_Pin|CS22_Pin);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOG, CS21_Pin|CS28_Pin);
+  LL_GPIO_SetOutputPin(GPIOG, CS21_Pin|CS28_Pin);
 
   /**/
-  LL_GPIO_ResetOutputPin(GPIOE, CS27_Pin|CS33_Pin|CS34_Pin|CS23_Pin
+  LL_GPIO_SetOutputPin(GPIOE, CS27_Pin|CS33_Pin|CS34_Pin|CS23_Pin
                           |CS24_Pin|CS29_Pin|CS30_Pin);
 
   /**/
