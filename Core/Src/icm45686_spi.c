@@ -110,13 +110,14 @@ static uint8_t Bus_GetIdx(ICM_Bus_t *bus);
  * Сырые RX-буферы FIFO: [шина 0/1/2][датчик 0..5][байт]
  *
  * Индекс шины: SPI1=0, SPI5=1, SPI4=2
- *
- * ОБЯЗАТЕЛЬНО: разместить в AXI SRAM (D2), не в DTCM/ITCM.
- * DMA1/DMA2 не имеют доступа к DTCM — буферы там будут молча
- * читаться как 0x00 или не писаться вовсе.
+
  * ================================================================ */
+/* DMA-буферы — ТОЛЬКО в AXI SRAM (0x24000000), не в DTCM! */
+/* DMA RX-буфер: ОБЯЗАТЕЛЬНО в AXI SRAM D1 (0x24000000).
+ * aligned(32) — кратно cache-line для корректного SCB_CleanDCache. */
 uint8_t g_fifo_data[3][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE]
-    __attribute__((aligned(4)));
+    __attribute__((section(".RAM_D1_noinit")))
+    __attribute__((aligned(32)));
 
 /* ================================================================
  * Флаг готовности пачки данных.
@@ -174,7 +175,13 @@ static volatile uint8_t g_buses_done_cnt = 0U;
 
 /* ── SPI1 (SCLK=PA5, MISO=PA6, MOSI=PA7) ── */
 /* DMA1: RX=Stream2, TX=Stream3              */
-ICM_Bus_t g_bus_spi1 = {
+/* __attribute__((section(".RAM_D1_noinit"))): структура лежит в AXI SRAM D1
+ * (0x24000000), доступной DMA1/DMA2. Без этого — попадает в DTCM (0x20000000),
+ * к которому DMA не имеет доступа, и tx_buf внутри структуры не передаётся. */
+ICM_Bus_t g_bus_spi1
+    __attribute__((section(".RAM_D1_noinit")))
+    __attribute__((aligned(4)))
+= {
     .spi           = SPI1,
     .dma           = DMA1,
     .dma_stream_rx = LL_DMA_STREAM_2,
@@ -191,7 +198,10 @@ ICM_Bus_t g_bus_spi1 = {
 
 /* ── SPI5 (SCLK=PF7, MISO=PF8, MOSI=PF9) ── */
 /* DMA2: RX=Stream2, TX=Stream3               */
-ICM_Bus_t g_bus_spi5 = {
+ICM_Bus_t g_bus_spi5
+    __attribute__((section(".RAM_D1_noinit")))
+    __attribute__((aligned(4)))
+= {
     .spi           = SPI5,
     .dma           = DMA2,
     .dma_stream_rx = LL_DMA_STREAM_2,
@@ -208,7 +218,10 @@ ICM_Bus_t g_bus_spi5 = {
 
 /* ── SPI4 (SCLK=PE2, MISO=PE5, MOSI=PE6) ── */
 /* DMA2: RX=Stream0, TX=Stream1               */
-ICM_Bus_t g_bus_spi4 = {
+ICM_Bus_t g_bus_spi4
+    __attribute__((section(".RAM_D1_noinit")))
+    __attribute__((aligned(4)))
+= {
     .spi           = SPI4,
     .dma           = DMA2,
     .dma_stream_rx = LL_DMA_STREAM_0,
@@ -402,8 +415,18 @@ void ICM_BusesInit(void)
  *   4. Передать addr_byte (бит7=0 → запись)
  *   5. Передать data_byte
  *   6. Ждать EOT
- *   7. CS HIGH
- *   8. Disable
+ *   7. ОБЯЗАТЕЛЬНО слить RX FIFO (2 dummy-байта)
+ *   8. CS HIGH
+ *   9. Disable
+ *
+ * Почему нужен шаг 7:
+ *   SPI STM32H7 в Full-Duplex всегда принимает байт одновременно
+ *   с передачей. При записи регистра принимаются 2 мусорных байта
+ *   от датчика (MISO в это время тянется датчиком к питанию/земле).
+ *   Если НЕ читать RX FIFO — через несколько вызовов WriteReg
+ *   FIFO переполнится (глубина = 8 байт у H7), флаг OVR выставится,
+ *   и следующий ICM_ReadReg вернёт мусор вместо реальных данных.
+ *   Это именно то, что вызывало неправильный WHO_AM_I!
  *
  * Используется ТОЛЬКО в ICM_InitAllSensors() и ICM_WriteIReg().
  * В DMA-цикле не вызывать!
@@ -430,16 +453,32 @@ void ICM_WriteReg(ICM_Sensor_t *sensor, uint8_t reg, uint8_t val)
     while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
     LL_SPI_TransmitData8(spi, val);
 
-    /* 6. Ждать конца транзакции */
+    /* 6. Ждать конца транзакции (все 2 байта переданы И приняты) */
     SPI_WaitEOT(spi);
 
-    /* 7. CS HIGH — деактивировать датчик */
+    /* 7. СЛИТЬ RX FIFO — обязательный шаг для Full-Duplex STM32H7 SPI!
+     *
+     * За время передачи 2 байт SPI принял 2 мусорных байта с MISO.
+     * Они сидят в RX FIFO и ДОЛЖНЫ быть прочитаны — иначе накапливаются
+     * от вызова к вызову и через ~4 транзакции дают флаг OVR (overrun),
+     * после чего ICM_ReadReg читает из FIFO старые мусорные данные.
+     *
+     * Ждём RXP (RX FIFO Not Empty) перед каждым чтением — на STM32H7
+     * байт может появиться в FIFO чуть позже флага EOT (pipeline). */
+    while ((LL_SPI_IsActiveFlag_RXP(spi)   == 0U) &&
+           (LL_SPI_IsActiveFlag_RXWNE(spi) == 0U)) {}
+    (void)LL_SPI_ReceiveData8(spi); /* dummy: ответ на адресный байт */
+
+    while ((LL_SPI_IsActiveFlag_RXP(spi)   == 0U) &&
+           (LL_SPI_IsActiveFlag_RXWNE(spi) == 0U)) {}
+    (void)LL_SPI_ReceiveData8(spi); /* dummy: ответ на байт данных  */
+
+    /* 8. CS HIGH — деактивировать датчик */
     LL_GPIO_SetOutputPin(sensor->cs_port, sensor->cs_pin);
 
-    /* 8. Выключить SPI */
+    /* 9. Выключить SPI */
     LL_SPI_Disable(spi);
 }
-
 /* ================================================================
  * ICM_ReadReg — блокирующее чтение регистра USER BANK 0.
  *
@@ -450,9 +489,17 @@ void ICM_WriteReg(ICM_Sensor_t *sensor, uint8_t reg, uint8_t val)
  *   4. Передать addr_byte | READ_BIT
  *   5. Передать dummy 0xFF
  *   6. Ждать EOT
- *   7. Прочитать RX FIFO (2 байта: dummy + data)
- *   8. CS HIGH
- *   9. Disable
+ *   7. Ждать RXP/RXWNE → читать 1-й байт (dummy)
+ *   8. Ждать RXP/RXWNE → читать 2-й байт (реальные данные)
+ *   9. CS HIGH
+ *  10. Disable
+ *
+ * Почему нужно ждать RXP после EOT:
+ *   На STM32H7 SPI-контроллер ставит флаг EOT когда последний бит
+ *   ПЕРЕДАН, но последний принятый байт может ещё не попасть в
+ *   RX FIFO из-за внутреннего pipeline. Чтение без ожидания RXP
+ *   вернёт значение из предыдущей транзакции (старый мусор из FIFO)
+ *   или 0x00 если FIFO пуст — именно это и давало неверный WHO_AM_I!
  *
  * Используется ТОЛЬКО в ICM_InitAllSensors() и ICM_ReadIReg().
  * В DMA-цикле не вызывать!
@@ -472,26 +519,36 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
     LL_SPI_Enable(spi);
     LL_SPI_StartMasterTransfer(spi);
 
-    /* 4. Передать адрес с битом READ */
+    /* 4. Передать адрес с битом READ (бит7=1) */
     while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
     LL_SPI_TransmitData8(spi, (uint8_t)(reg | ICM45686_SPI_READ_BIT));
 
-    /* 5. Dummy-байт для генерации тактов при приёме данных */
+    /* 5. Dummy-байт: генерирует тактовые импульсы для приёма данных от датчика */
     while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
     LL_SPI_TransmitData8(spi, 0xFFU);
 
-    /* 6. Ждать конца транзакции (все байты RX приняты) */
+    /* 6. Ждать конца транзакции (все байты TX отправлены, RX приняты) */
     SPI_WaitEOT(spi);
 
-    /* 7. Читать RX FIFO: первый байт — dummy (ответ на адресный байт),
-     *    второй — реальные данные регистра */
-    (void)LL_SPI_ReceiveData8(spi); /* dummy */
-    result = LL_SPI_ReceiveData8(spi);
+    /* 7. Ждать появления 1-го байта в RX FIFO и читать dummy
+     *
+     * RXP = "RX FIFO Not Empty" (есть хотя бы 1 байт для текущего DataWidth)
+     * RXWNE = "RX Word Not Empty" (есть хотя бы 32-бит данных, независимо от DataWidth)
+     * Проверяем оба флага — на 8-битном режиме STM32H7 иногда поднимает RXWNE
+     * раньше чем RXP из-за особенностей внутреннего FIFO-пакетирования. */
+    while ((LL_SPI_IsActiveFlag_RXP(spi)   == 0U) &&
+           (LL_SPI_IsActiveFlag_RXWNE(spi) == 0U)) {}
+    (void)LL_SPI_ReceiveData8(spi); /* dummy: ответ на адресный байт (MISO не несёт данных) */
 
-    /* 8. CS HIGH */
+    /* 8. Ждать появления 2-го байта и читать реальные данные регистра */
+    while ((LL_SPI_IsActiveFlag_RXP(spi)   == 0U) &&
+           (LL_SPI_IsActiveFlag_RXWNE(spi) == 0U)) {}
+    result = LL_SPI_ReceiveData8(spi); /* реальное значение регистра */
+
+    /* 9. CS HIGH */
     LL_GPIO_SetOutputPin(sensor->cs_port, sensor->cs_pin);
 
-    /* 9. Выключить SPI */
+    /* 10. Выключить SPI */
     LL_SPI_Disable(spi);
 
     return result;

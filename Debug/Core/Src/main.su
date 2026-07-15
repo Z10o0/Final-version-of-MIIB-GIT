@@ -106,4 +106,4 @@
 ../Core/Src/main.c:1104:13:MX_DMA_Init	8	static
 ../Core/Src/main.c:1157:13:MX_GPIO_Init	32	static
 ../Core/Src/main.c:1292:6:MPU_Config	8	static
-../Core/Src/main.c:1310:6:Error_Handler	4	static,ignoring_inline_asm
+../Core/Src/main.c:1339:6:Error_Handler	4	static,ignoring_inline_asm
