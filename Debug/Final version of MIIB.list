@@ -21,25 +21,25 @@ Idx Name          Size      VMA       LMA       File off  Algn
                   ALLOC
   8 .ARM.attributes 0000002e  00000000  00000000  0000734c  2**0
                   CONTENTS, READONLY
-  9 .debug_info   0000b5c4  00000000  00000000  0000737a  2**0
+  9 .debug_info   0000b5d0  00000000  00000000  0000737a  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 10 .debug_abbrev 00001ab4  00000000  00000000  0001293e  2**0
+ 10 .debug_abbrev 00001a98  00000000  00000000  0001294a  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 11 .debug_aranges 00000f20  00000000  00000000  000143f8  2**3
+ 11 .debug_aranges 00000f20  00000000  00000000  000143e8  2**3
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 12 .debug_rnglists 00000b5c  00000000  00000000  00015318  2**0
+ 12 .debug_rnglists 00000b5c  00000000  00000000  00015308  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 13 .debug_macro  0002c07b  00000000  00000000  00015e74  2**0
+ 13 .debug_macro  0002c07b  00000000  00000000  00015e64  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 14 .debug_line   0000a603  00000000  00000000  00041eef  2**0
+ 14 .debug_line   0000a603  00000000  00000000  00041edf  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 15 .debug_str    000fae1a  00000000  00000000  0004c4f2  2**0
+ 15 .debug_str    000fae1a  00000000  00000000  0004c4e2  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 16 .comment      00000043  00000000  00000000  0014730c  2**0
+ 16 .comment      00000043  00000000  00000000  001472fc  2**0
                   CONTENTS, READONLY
- 17 .debug_frame  00003ba4  00000000  00000000  00147350  2**2
+ 17 .debug_frame  00003ba4  00000000  00000000  00147340  2**2
                   CONTENTS, READONLY, DEBUGGING, OCTETS
- 18 .debug_line_str 00000085  00000000  00000000  0014aef4  2**0
+ 18 .debug_line_str 00000085  00000000  00000000  0014aee4  2**0
                   CONTENTS, READONLY, DEBUGGING, OCTETS
 
 Disassembly of section .text:
@@ -1426,9 +1426,9 @@ __STATIC_INLINE void LL_GPIO_ResetOutputPin(GPIO_TypeDef *GPIOx, uint32_t PinMas
 	...
 
 08000a8c <Bus_GetIdx>:
-/* ================================================================
- * Bus_GetIdx — индекс шины в массиве g_fifo_data
- * SPI1=0, SPI4=1, SPI5=2
+ * Bus_GetIdx — индекс шины в массиве g_fifo_data.
+ * SPI1=0, SPI5=1, SPI4=2.
+ * Порядок соответствует каскаду: SPI1→SPI5→SPI4.
  * ================================================================ */
 static uint8_t Bus_GetIdx(ICM_Bus_t *bus)
 {
@@ -1443,14 +1443,14 @@ static uint8_t Bus_GetIdx(ICM_Bus_t *bus)
  8000a9a:	d101      	bne.n	8000aa0 <Bus_GetIdx+0x14>
  8000a9c:	2300      	movs	r3, #0
  8000a9e:	e006      	b.n	8000aae <Bus_GetIdx+0x22>
-    if (bus == &g_bus_spi4) { return 1U; }
+    if (bus == &g_bus_spi5) { return 1U; }
  8000aa0:	687b      	ldr	r3, [r7, #4]
  8000aa2:	4a07      	ldr	r2, [pc, #28]	@ (8000ac0 <Bus_GetIdx+0x34>)
  8000aa4:	4293      	cmp	r3, r2
  8000aa6:	d101      	bne.n	8000aac <Bus_GetIdx+0x20>
  8000aa8:	2301      	movs	r3, #1
  8000aaa:	e000      	b.n	8000aae <Bus_GetIdx+0x22>
-    return 2U;
+    return 2U; /* SPI4 */
  8000aac:	2302      	movs	r3, #2
 }
  8000aae:	4618      	mov	r0, r3
@@ -1513,9 +1513,9 @@ static uint8_t Bus_FindNextOK(ICM_Bus_t *bus, uint8_t start_idx)
  8000b02:	4770      	bx	lr
 
 08000b04 <SPI_WaitEOT>:
- *
- * Используется в ICM_WriteReg / ICM_ReadReg.
- * В DMA-пути НЕ используется (там работаем по TC ISR).
+ * EOT устанавливается когда все байты TX отправлены И все RX получены.
+ * Используется только в ICM_WriteReg / ICM_ReadReg.
+ * В DMA-пути НЕ используется (там завершение фиксируется по TC ISR).
  * ================================================================ */
 static inline void SPI_WaitEOT(SPI_TypeDef *spi)
 {
@@ -1523,7 +1523,6 @@ static inline void SPI_WaitEOT(SPI_TypeDef *spi)
  8000b06:	b082      	sub	sp, #8
  8000b08:	af00      	add	r7, sp, #0
  8000b0a:	6078      	str	r0, [r7, #4]
-    /* EOT = все байты TX отправлены И все байты RX получены */
     while (LL_SPI_IsActiveFlag_EOT(spi) == 0U) {}
  8000b0c:	bf00      	nop
  8000b0e:	6878      	ldr	r0, [r7, #4]
@@ -1546,7 +1545,7 @@ static inline void SPI_WaitEOT(SPI_TypeDef *spi)
 08000b2e <SPI_EnableDMA>:
 /* ================================================================
  * SPI_EnableDMA — включение SPI в DMA-режиме.
- * Размер транзакции должен быть задан до вызова этой функции.
+ * Размер транзакции SetTransferSize() должен быть задан ДО вызова.
  * ================================================================ */
 static inline void SPI_EnableDMA(SPI_TypeDef *spi)
 {
@@ -1573,9 +1572,9 @@ static inline void SPI_EnableDMA(SPI_TypeDef *spi)
  8000b54:	bd80      	pop	{r7, pc}
 
 08000b56 <SPI_DisableDMA>:
- * ВАЖНО: вызывать только в ISR-контексте, где EOT уже наступил
- * (DMA TC происходит после последнего байта, EOT — сразу после).
- * Не содержит busy-wait — безопасно вызывать из ISR.
+ * ВАЖНО: вызывать только из ISR-контекста, где DMA TC уже произошёл.
+ * К моменту TC флаг EOT на SPI уже установлен — busy-wait не нужен.
+ * Безопасно вызывать из ISR без задержек.
  * ================================================================ */
 static inline void SPI_DisableDMA(SPI_TypeDef *spi)
 {
@@ -1589,7 +1588,7 @@ static inline void SPI_DisableDMA(SPI_TypeDef *spi)
     LL_SPI_DisableDMAReq_TX(spi);
  8000b64:	6878      	ldr	r0, [r7, #4]
  8000b66:	f7ff ff2d 	bl	80009c4 <LL_SPI_DisableDMAReq_TX>
-    /* Очистить флаги завершения транзакции */
+    /* Очистить флаги завершения SPI-транзакции если установлены */
     if (LL_SPI_IsActiveFlag_EOT(spi))
  8000b6a:	6878      	ldr	r0, [r7, #4]
  8000b6c:	f7ff fec7 	bl	80008fe <LL_SPI_IsActiveFlag_EOT>
@@ -1614,19 +1613,16 @@ static inline void SPI_DisableDMA(SPI_TypeDef *spi)
  8000b8e:	bd80      	pop	{r7, pc}
 
 08000b90 <Delay_ms>:
- * uwTick инкрементируется в SysTick_Handler() каждые 1 мс.
- * Объявлен как extern — генерируется CubeMX в stm32h7xx_it.c.
+ * SysTick->LOAD = SystemCoreClock/1000 - 1 при стандартной настройке CubeMX.
+ * Обрабатывает переполнение VAL (wrap-around при каждом тике).
+ * Не зависит от HAL uwTick и не требует разрешённых прерываний.
  * ================================================================ */
-
 static void Delay_ms(uint32_t ms)
 {
  8000b90:	b480      	push	{r7}
  8000b92:	b089      	sub	sp, #36	@ 0x24
  8000b94:	af00      	add	r7, sp, #0
  8000b96:	6078      	str	r0, [r7, #4]
-    /* Задержка через регистры SysTick — без зависимости от HAL (uwTick).
-     * SysTick->LOAD = SystemCoreClock/1000 - 1 при стандартной настройке CubeMX.
-     * Считаем убывающие тики VAL, обрабатываем переполнение (wrap-around). */
     uint32_t ticks_per_ms = SysTick->LOAD + 1UL;
  8000b98:	4b18      	ldr	r3, [pc, #96]	@ (8000bfc <Delay_ms+0x6c>)
  8000b9a:	685b      	ldr	r3, [r3, #4]
@@ -1659,7 +1655,7 @@ static void Delay_ms(uint32_t ms)
  8000bc0:	429a      	cmp	r2, r3
  8000bc2:	d206      	bcs.n	8000bd2 <Delay_ms+0x42>
         {
-            elapsed += (prev_val - curr_val);          /* Обычный убывающий счёт */
+            elapsed += (prev_val - curr_val);               /* Обычный убывающий счёт */
  8000bc4:	69ba      	ldr	r2, [r7, #24]
  8000bc6:	68fb      	ldr	r3, [r7, #12]
  8000bc8:	1ad3      	subs	r3, r2, r3
@@ -1734,7 +1730,7 @@ void ICM_BusesInit(void)
  8000c28:	4610      	mov	r0, r2
  8000c2a:	f7ff ff11 	bl	8000a50 <LL_GPIO_SetOutputPin>
                              g_bus_spi1.sensors[s].cs_pin);
-        LL_GPIO_SetOutputPin(g_bus_spi4.sensors[s].cs_port,
+        LL_GPIO_SetOutputPin(g_bus_spi5.sensors[s].cs_port,
  8000c2e:	79fb      	ldrb	r3, [r7, #7]
  8000c30:	4a41      	ldr	r2, [pc, #260]	@ (8000d38 <ICM_BusesInit+0x138>)
  8000c32:	3301      	adds	r3, #1
@@ -1751,8 +1747,8 @@ void ICM_BusesInit(void)
  8000c48:	4619      	mov	r1, r3
  8000c4a:	4610      	mov	r0, r2
  8000c4c:	f7ff ff00 	bl	8000a50 <LL_GPIO_SetOutputPin>
-                             g_bus_spi4.sensors[s].cs_pin);
-        LL_GPIO_SetOutputPin(g_bus_spi5.sensors[s].cs_port,
+                             g_bus_spi5.sensors[s].cs_pin);
+        LL_GPIO_SetOutputPin(g_bus_spi4.sensors[s].cs_port,
  8000c50:	79fb      	ldrb	r3, [r7, #7]
  8000c52:	4a3a      	ldr	r2, [pc, #232]	@ (8000d3c <ICM_BusesInit+0x13c>)
  8000c54:	3301      	adds	r3, #1
@@ -1769,7 +1765,7 @@ void ICM_BusesInit(void)
  8000c6a:	4619      	mov	r1, r3
  8000c6c:	4610      	mov	r0, r2
  8000c6e:	f7ff feef 	bl	8000a50 <LL_GPIO_SetOutputPin>
-                             g_bus_spi5.sensors[s].cs_pin);
+                             g_bus_spi4.sensors[s].cs_pin);
 
         /* Сброс fault-флагов — все датчики считаются исправными до проверки */
         g_bus_spi1.sensors[s].fault = 0U;
@@ -1780,7 +1776,7 @@ void ICM_BusesInit(void)
  8000c7a:	331d      	adds	r3, #29
  8000c7c:	2200      	movs	r2, #0
  8000c7e:	701a      	strb	r2, [r3, #0]
-        g_bus_spi4.sensors[s].fault = 0U;
+        g_bus_spi5.sensors[s].fault = 0U;
  8000c80:	79fb      	ldrb	r3, [r7, #7]
  8000c82:	4a2d      	ldr	r2, [pc, #180]	@ (8000d38 <ICM_BusesInit+0x138>)
  8000c84:	011b      	lsls	r3, r3, #4
@@ -1788,7 +1784,7 @@ void ICM_BusesInit(void)
  8000c88:	331d      	adds	r3, #29
  8000c8a:	2200      	movs	r2, #0
  8000c8c:	701a      	strb	r2, [r3, #0]
-        g_bus_spi5.sensors[s].fault = 0U;
+        g_bus_spi4.sensors[s].fault = 0U;
  8000c8e:	79fb      	ldrb	r3, [r7, #7]
  8000c90:	4a2a      	ldr	r2, [pc, #168]	@ (8000d3c <ICM_BusesInit+0x13c>)
  8000c92:	011b      	lsls	r3, r3, #4
@@ -1813,12 +1809,12 @@ void ICM_BusesInit(void)
  8000caa:	21ff      	movs	r1, #255	@ 0xff
  8000cac:	4824      	ldr	r0, [pc, #144]	@ (8000d40 <ICM_BusesInit+0x140>)
  8000cae:	f004 fd79 	bl	80057a4 <memset>
-    memset(g_bus_spi4.tx_buf, 0xFFU, sizeof(g_bus_spi4.tx_buf));
+    memset(g_bus_spi5.tx_buf, 0xFFU, sizeof(g_bus_spi5.tx_buf));
  8000cb2:	22a2      	movs	r2, #162	@ 0xa2
  8000cb4:	21ff      	movs	r1, #255	@ 0xff
  8000cb6:	4823      	ldr	r0, [pc, #140]	@ (8000d44 <ICM_BusesInit+0x144>)
  8000cb8:	f004 fd74 	bl	80057a4 <memset>
-    memset(g_bus_spi5.tx_buf, 0xFFU, sizeof(g_bus_spi5.tx_buf));
+    memset(g_bus_spi4.tx_buf, 0xFFU, sizeof(g_bus_spi4.tx_buf));
  8000cbc:	22a2      	movs	r2, #162	@ 0xa2
  8000cbe:	21ff      	movs	r1, #255	@ 0xff
  8000cc0:	4821      	ldr	r0, [pc, #132]	@ (8000d48 <ICM_BusesInit+0x148>)
@@ -1828,11 +1824,11 @@ void ICM_BusesInit(void)
  8000cc6:	4b1b      	ldr	r3, [pc, #108]	@ (8000d34 <ICM_BusesInit+0x134>)
  8000cc8:	2294      	movs	r2, #148	@ 0x94
  8000cca:	f883 2074 	strb.w	r2, [r3, #116]	@ 0x74
-    g_bus_spi4.tx_buf[0] = (uint8_t)(ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT);
+    g_bus_spi5.tx_buf[0] = (uint8_t)(ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT);
  8000cce:	4b1a      	ldr	r3, [pc, #104]	@ (8000d38 <ICM_BusesInit+0x138>)
  8000cd0:	2294      	movs	r2, #148	@ 0x94
  8000cd2:	f883 2074 	strb.w	r2, [r3, #116]	@ 0x74
-    g_bus_spi5.tx_buf[0] = (uint8_t)(ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT);
+    g_bus_spi4.tx_buf[0] = (uint8_t)(ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT);
  8000cd6:	4b19      	ldr	r3, [pc, #100]	@ (8000d3c <ICM_BusesInit+0x13c>)
  8000cd8:	2294      	movs	r2, #148	@ 0x94
  8000cda:	f883 2074 	strb.w	r2, [r3, #116]	@ 0x74
@@ -1863,11 +1859,11 @@ void ICM_BusesInit(void)
  8000cfc:	4b0d      	ldr	r3, [pc, #52]	@ (8000d34 <ICM_BusesInit+0x134>)
  8000cfe:	2200      	movs	r2, #0
  8000d00:	f883 2070 	strb.w	r2, [r3, #112]	@ 0x70
-    g_bus_spi4.current_sensor_idx = 0U;
+    g_bus_spi5.current_sensor_idx = 0U;
  8000d04:	4b0c      	ldr	r3, [pc, #48]	@ (8000d38 <ICM_BusesInit+0x138>)
  8000d06:	2200      	movs	r2, #0
  8000d08:	f883 2070 	strb.w	r2, [r3, #112]	@ 0x70
-    g_bus_spi5.current_sensor_idx = 0U;
+    g_bus_spi4.current_sensor_idx = 0U;
  8000d0c:	4b0b      	ldr	r3, [pc, #44]	@ (8000d3c <ICM_BusesInit+0x13c>)
  8000d0e:	2200      	movs	r2, #0
  8000d10:	f883 2070 	strb.w	r2, [r3, #112]	@ 0x70
@@ -1876,11 +1872,11 @@ void ICM_BusesInit(void)
  8000d14:	4b07      	ldr	r3, [pc, #28]	@ (8000d34 <ICM_BusesInit+0x134>)
  8000d16:	2200      	movs	r2, #0
  8000d18:	f883 2116 	strb.w	r2, [r3, #278]	@ 0x116
-    g_bus_spi4.transfer_complete  = 0U;
+    g_bus_spi5.transfer_complete  = 0U;
  8000d1c:	4b06      	ldr	r3, [pc, #24]	@ (8000d38 <ICM_BusesInit+0x138>)
  8000d1e:	2200      	movs	r2, #0
  8000d20:	f883 2116 	strb.w	r2, [r3, #278]	@ 0x116
-    g_bus_spi5.transfer_complete  = 0U;
+    g_bus_spi4.transfer_complete  = 0U;
  8000d24:	4b05      	ldr	r3, [pc, #20]	@ (8000d3c <ICM_BusesInit+0x13c>)
  8000d26:	2200      	movs	r2, #0
  8000d28:	f883 2116 	strb.w	r2, [r3, #278]	@ 0x116
@@ -2113,7 +2109,7 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
  8000e92:	bd80      	pop	{r7, pc}
 
 08000e94 <ICM_WriteIReg>:
- *   4. Пауза >= 10 мкс (ждём пока аппаратура завершит транзакцию к IREG)
+ *   4. Пауза >= 10 мкс (аппаратура завершает транзакцию к IREG)
  *
  * ВЫЗЫВАТЬ ДО PWR_MGMT0, иначе CLKIN игнорируется!
  * ================================================================ */
@@ -2195,12 +2191,12 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor, uint8_t addr_h, uint8_t addr_l)
  8000f02:	6878      	ldr	r0, [r7, #4]
  8000f04:	f7ff ff2a 	bl	8000d5c <ICM_WriteReg>
 
-    /* Шаг 3: инициировать чтение */
+    /* Шаг 3: пауза перед чтением (аппаратура завершает адресацию) */
     Delay_ms(ICM45686_IREG_DELAY_MS);
  8000f08:	2001      	movs	r0, #1
  8000f0a:	f7ff fe41 	bl	8000b90 <Delay_ms>
 
-    /* Шаг 4: прочитать результат */
+    /* Шаг 4: прочитать результат из IREG_DATA */
     return ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
  8000f0e:	217e      	movs	r1, #126	@ 0x7e
  8000f10:	6878      	ldr	r0, [r7, #4]
@@ -2213,7 +2209,7 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor, uint8_t addr_h, uint8_t addr_l)
  8000f1e:	bd80      	pop	{r7, pc}
 
 08000f20 <ICM_InitAllSensors>:
- *
+ * Порядок обхода шин совпадает с каскадом DMA: SPI1 → SPI5 → SPI4.
  * Неисправные датчики НЕ останавливают процедуру.
  * Возвращает маску: бит N = 1 если датчик N неисправен.
  * ================================================================ */
@@ -2222,7 +2218,8 @@ uint32_t ICM_InitAllSensors(void)
  8000f20:	b580      	push	{r7, lr}
  8000f22:	b086      	sub	sp, #24
  8000f24:	af00      	add	r7, sp, #0
-    ICM_Bus_t   *buses[3] = { &g_bus_spi1, &g_bus_spi4, &g_bus_spi5 };
+    /* Порядок обхода совпадает с порядком каскада DMA */
+    ICM_Bus_t   *buses[3] = { &g_bus_spi1, &g_bus_spi5, &g_bus_spi4 };
  8000f26:	4a53      	ldr	r2, [pc, #332]	@ (8001074 <ICM_InitAllSensors+0x154>)
  8000f28:	463b      	mov	r3, r7
  8000f2a:	ca07      	ldmia	r2, {r0, r1, r2}
@@ -2285,7 +2282,7 @@ uint32_t ICM_InitAllSensors(void)
  8000f7c:	2be9      	cmp	r3, #233	@ 0xe9
  8000f7e:	d00e      	beq.n	8000f9e <ICM_InitAllSensors+0x7e>
             {
-                /* Датчик не отвечает — помечаем неисправным, продолжаем */
+                /* Датчик не отвечает или неисправен — пропускаем */
                 sensor->fault        = 1U;
  8000f80:	693b      	ldr	r3, [r7, #16]
  8000f82:	2201      	movs	r2, #1
@@ -2326,7 +2323,7 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L,
                           ICM45686_CLKIN_ENABLE_VAL);
 
-            /* Верификация: убедиться что CLKIN включился */
+            /* ── Шаг 5: верификация CLKIN ── */
             ireg_check = ICM_ReadIReg(sensor,
  8000fb4:	2230      	movs	r2, #48	@ 0x30
  8000fb6:	21a4      	movs	r1, #164	@ 0xa4
@@ -2341,7 +2338,7 @@ uint32_t ICM_InitAllSensors(void)
  8000fc4:	2b06      	cmp	r3, #6
  8000fc6:	d00e      	beq.n	8000fe6 <ICM_InitAllSensors+0xc6>
             {
-                /* IREG-запись не прошла — датчик считается неисправным */
+                /* IREG-запись не прошла — датчик неисправен */
                 sensor->fault        = 1U;
  8000fc8:	693b      	ldr	r3, [r7, #16]
  8000fca:	2201      	movs	r2, #1
@@ -2360,7 +2357,7 @@ uint32_t ICM_InitAllSensors(void)
                 continue;
  8000fe4:	e031      	b.n	800104a <ICM_InitAllSensors+0x12a>
 
-            /* ── Шаг 5: включение RTC_MODE + TMST_EN через IREG ──
+            /* ── Шаг 6: включение RTC_MODE + TMST_EN через IREG ──
              * SMC_CONTROL_0 @ 0xA458:
              *   бит[6]=1 (RTC_MODE): ODR тактируется от внешнего CLKIN
              *   бит[1]=1 (TMST_EN):  включить timestamp в FIFO-пакет */
@@ -2372,7 +2369,7 @@ uint32_t ICM_InitAllSensors(void)
  8000fee:	f7ff ff51 	bl	8000e94 <ICM_WriteIReg>
                           ICM45686_RTC_MODE_TMST_ENABLE_VAL);
 
-            /* ── Шаг 6: конфигурация акселерометра ──
+            /* ── Шаг 7: конфигурация акселерометра ──
              * Биты [7:5] = FS, биты [3:0] = ODR
              * Значения задаются в icm45686_config.h */
             ICM_WriteReg(sensor, ICM45686_REG_ACCEL_CONFIG0,
@@ -2382,7 +2379,7 @@ uint32_t ICM_InitAllSensors(void)
  8000ff8:	f7ff feb0 	bl	8000d5c <ICM_WriteReg>
                          (uint8_t)(ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE));
 
-            /* ── Шаг 7: конфигурация гироскопа ──
+            /* ── Шаг 8: конфигурация гироскопа ──
              * Биты [7:4] = FS, биты [3:0] = ODR */
             ICM_WriteReg(sensor, ICM45686_REG_GYRO_CONFIG0,
  8000ffc:	2214      	movs	r2, #20
@@ -2391,7 +2388,7 @@ uint32_t ICM_InitAllSensors(void)
  8001002:	f7ff feab 	bl	8000d5c <ICM_WriteReg>
                          (uint8_t)(ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE));
 
-            /* ── Шаг 8: настройка FIFO ──
+            /* ── Шаг 9: настройка FIFO ──
              * STREAM-режим: новые данные вытесняют старые при переполнении.
              * Включаем: гироскоп + акселерометр + температура + timestamp */
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG0,
@@ -2399,9 +2396,9 @@ uint32_t ICM_InitAllSensors(void)
  8001008:	211d      	movs	r1, #29
  800100a:	6938      	ldr	r0, [r7, #16]
  800100c:	f7ff fea6 	bl	8000d5c <ICM_WriteReg>
-            /* ── Шаг 9: порог FIFO (watermark) ──
-             * При достижении порога генерируется флаг INT_STATUS3.FIFO_THS.
-             * Порог = количество пакетов × размер одного пакета.
+
+            /* ── Шаг 10: порог FIFO (watermark) ──
+             * Порог = количество пакетов × размер одного пакета в байтах.
              * Двухбайтовая запись: [0] = LSB, [1] = MSB[3:0] */
             {
                 uint16_t wm = (uint16_t)(ICM_FIFO_POLL_PACKETS *
@@ -2431,7 +2428,7 @@ uint32_t ICM_InitAllSensors(void)
  8001036:	f7ff fe91 	bl	8000d5c <ICM_WriteReg>
             }
 
-            /* ── Шаг 10: включение питания ──
+            /* ── Шаг 11: включение питания ──
              * Гироскоп: Low-Noise mode (высшая точность)
              * Акселерометр: Low-Noise mode */
             ICM_WriteReg(sensor, ICM45686_REG_PWR_MGMT0,
@@ -2442,7 +2439,7 @@ uint32_t ICM_InitAllSensors(void)
                          (uint8_t)(ICM45686_PWR_GYRO_MODE_LN |
                                    ICM45686_PWR_ACCEL_MODE_LN));
 
-            /* ── Шаг 11: прогрев гироскопа ──
+            /* ── Шаг 12: прогрев гироскопа ──
              * Минимум 200 мс до стабилизации выходных данных */
             Delay_ms(ICM45686_STARTUP_DELAY_MS);
  8001044:	20c8      	movs	r0, #200	@ 0xc8
@@ -2477,7 +2474,7 @@ uint32_t ICM_InitAllSensors(void)
  8001078:	24001a34 	.word	0x24001a34
 
 0800107c <BusBurstRead_Start>:
- *   7. Запустить RX-стрим, затем TX-стрим
+ *   8. Запустить RX-стрим, затем TX-стрим, затем SPI
  *
  * ВЫЗЫВАТЬ только для исправных датчиков (fault == 0)!
  * ================================================================ */
@@ -2514,7 +2511,7 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80010ac:	4603      	mov	r3, r0
  80010ae:	73fb      	strb	r3, [r7, #15]
 
-    /* ── 1. Остановить стримы ── */
+    /* ── 1-2. Остановить стримы и дождаться физического останова ── */
     LL_DMA_DisableStream(dma, rx_st);
  80010b0:	6979      	ldr	r1, [r7, #20]
  80010b2:	69b8      	ldr	r0, [r7, #24]
@@ -2523,7 +2520,6 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80010b8:	6939      	ldr	r1, [r7, #16]
  80010ba:	69b8      	ldr	r0, [r7, #24]
  80010bc:	f7ff fa62 	bl	8000584 <LL_DMA_DisableStream>
-    /* Ждать физического останова (FIFO может ещё работать) */
     while (LL_DMA_IsEnabledStream(dma, rx_st) != 0U) {}
  80010c0:	bf00      	nop
  80010c2:	6979      	ldr	r1, [r7, #20]
@@ -2541,15 +2537,16 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80010dc:	2b00      	cmp	r3, #0
  80010de:	d1f8      	bne.n	80010d2 <BusBurstRead_Start+0x56>
 
-    /* ── 2. Сброс флагов TC, TE, HT, FE ──
-     * Необходимо сбрасывать ВСЕ флаги, иначе ISR не будет вызван */
+    /* ── 3. Сброс флагов TC, TE, HT ──
+     * Необходимо сбрасывать ВСЕ флаги перед повторным запуском,
+     * иначе ISR сработает немедленно по старому флагу. */
     if (dma == DMA1)
  80010e0:	69bb      	ldr	r3, [r7, #24]
  80010e2:	4a4c      	ldr	r2, [pc, #304]	@ (8001214 <BusBurstRead_Start+0x198>)
  80010e4:	4293      	cmp	r3, r2
  80010e6:	d112      	bne.n	800110e <BusBurstRead_Start+0x92>
     {
-        /* RX Stream2 */
+        /* SPI1: RX=Stream2, TX=Stream3 */
         LL_DMA_ClearFlag_TC2(DMA1);
  80010e8:	484a      	ldr	r0, [pc, #296]	@ (8001214 <BusBurstRead_Start+0x198>)
  80010ea:	f7ff fb39 	bl	8000760 <LL_DMA_ClearFlag_TC2>
@@ -2559,7 +2556,6 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
         LL_DMA_ClearFlag_HT2(DMA1);
  80010f4:	4847      	ldr	r0, [pc, #284]	@ (8001214 <BusBurstRead_Start+0x198>)
  80010f6:	f7ff fafc 	bl	80006f2 <LL_DMA_ClearFlag_HT2>
-        /* TX Stream3 */
         LL_DMA_ClearFlag_TC3(DMA1);
  80010fa:	4846      	ldr	r0, [pc, #280]	@ (8001214 <BusBurstRead_Start+0x198>)
  80010fc:	f7ff fb3e 	bl	800077c <LL_DMA_ClearFlag_TC3>
@@ -2571,57 +2567,57 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  8001108:	f7ff fb01 	bl	800070e <LL_DMA_ClearFlag_HT3>
  800110c:	e027      	b.n	800115e <BusBurstRead_Start+0xe2>
     }
-    else /* DMA2 — используется SPI4 и SPI5 */
+    else /* DMA2 — используется SPI5 и SPI4 */
     {
-        if (rx_st == LL_DMA_STREAM_0)       /* SPI4 RX */
+        if (rx_st == LL_DMA_STREAM_2)   /* SPI5: RX=Stream2, TX=Stream3 */
  800110e:	697b      	ldr	r3, [r7, #20]
- 8001110:	2b00      	cmp	r3, #0
+ 8001110:	2b02      	cmp	r3, #2
  8001112:	d112      	bne.n	800113a <BusBurstRead_Start+0xbe>
         {
-            LL_DMA_ClearFlag_TC0(DMA2);
+            LL_DMA_ClearFlag_TC2(DMA2);
  8001114:	4840      	ldr	r0, [pc, #256]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001116:	f7ff fb08 	bl	800072a <LL_DMA_ClearFlag_TC0>
-            LL_DMA_ClearFlag_TE0(DMA2);
+ 8001116:	f7ff fb23 	bl	8000760 <LL_DMA_ClearFlag_TC2>
+            LL_DMA_ClearFlag_TE2(DMA2);
  800111a:	483f      	ldr	r0, [pc, #252]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 800111c:	f7ff fb3c 	bl	8000798 <LL_DMA_ClearFlag_TE0>
-            LL_DMA_ClearFlag_HT0(DMA2);
+ 800111c:	f7ff fb57 	bl	80007ce <LL_DMA_ClearFlag_TE2>
+            LL_DMA_ClearFlag_HT2(DMA2);
  8001120:	483d      	ldr	r0, [pc, #244]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001122:	f7ff facb 	bl	80006bc <LL_DMA_ClearFlag_HT0>
-            LL_DMA_ClearFlag_TC1(DMA2);     /* SPI4 TX */
+ 8001122:	f7ff fae6 	bl	80006f2 <LL_DMA_ClearFlag_HT2>
+            LL_DMA_ClearFlag_TC3(DMA2);
  8001126:	483c      	ldr	r0, [pc, #240]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001128:	f7ff fb0c 	bl	8000744 <LL_DMA_ClearFlag_TC1>
-            LL_DMA_ClearFlag_TE1(DMA2);
+ 8001128:	f7ff fb28 	bl	800077c <LL_DMA_ClearFlag_TC3>
+            LL_DMA_ClearFlag_TE3(DMA2);
  800112c:	483a      	ldr	r0, [pc, #232]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 800112e:	f7ff fb40 	bl	80007b2 <LL_DMA_ClearFlag_TE1>
-            LL_DMA_ClearFlag_HT1(DMA2);
+ 800112e:	f7ff fb5c 	bl	80007ea <LL_DMA_ClearFlag_TE3>
+            LL_DMA_ClearFlag_HT3(DMA2);
  8001132:	4839      	ldr	r0, [pc, #228]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001134:	f7ff facf 	bl	80006d6 <LL_DMA_ClearFlag_HT1>
+ 8001134:	f7ff faeb 	bl	800070e <LL_DMA_ClearFlag_HT3>
  8001138:	e011      	b.n	800115e <BusBurstRead_Start+0xe2>
         }
-        else                                 /* SPI5 RX = Stream2 */
+        else                            /* SPI4: RX=Stream0, TX=Stream1 */
         {
-            LL_DMA_ClearFlag_TC2(DMA2);
+            LL_DMA_ClearFlag_TC0(DMA2);
  800113a:	4837      	ldr	r0, [pc, #220]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 800113c:	f7ff fb10 	bl	8000760 <LL_DMA_ClearFlag_TC2>
-            LL_DMA_ClearFlag_TE2(DMA2);
+ 800113c:	f7ff faf5 	bl	800072a <LL_DMA_ClearFlag_TC0>
+            LL_DMA_ClearFlag_TE0(DMA2);
  8001140:	4835      	ldr	r0, [pc, #212]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001142:	f7ff fb44 	bl	80007ce <LL_DMA_ClearFlag_TE2>
-            LL_DMA_ClearFlag_HT2(DMA2);
+ 8001142:	f7ff fb29 	bl	8000798 <LL_DMA_ClearFlag_TE0>
+            LL_DMA_ClearFlag_HT0(DMA2);
  8001146:	4834      	ldr	r0, [pc, #208]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001148:	f7ff fad3 	bl	80006f2 <LL_DMA_ClearFlag_HT2>
-            LL_DMA_ClearFlag_TC3(DMA2);     /* SPI5 TX */
+ 8001148:	f7ff fab8 	bl	80006bc <LL_DMA_ClearFlag_HT0>
+            LL_DMA_ClearFlag_TC1(DMA2);
  800114c:	4832      	ldr	r0, [pc, #200]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 800114e:	f7ff fb15 	bl	800077c <LL_DMA_ClearFlag_TC3>
-            LL_DMA_ClearFlag_TE3(DMA2);
+ 800114e:	f7ff faf9 	bl	8000744 <LL_DMA_ClearFlag_TC1>
+            LL_DMA_ClearFlag_TE1(DMA2);
  8001152:	4831      	ldr	r0, [pc, #196]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 8001154:	f7ff fb49 	bl	80007ea <LL_DMA_ClearFlag_TE3>
-            LL_DMA_ClearFlag_HT3(DMA2);
+ 8001154:	f7ff fb2d 	bl	80007b2 <LL_DMA_ClearFlag_TE1>
+            LL_DMA_ClearFlag_HT1(DMA2);
  8001158:	482f      	ldr	r0, [pc, #188]	@ (8001218 <BusBurstRead_Start+0x19c>)
- 800115a:	f7ff fad8 	bl	800070e <LL_DMA_ClearFlag_HT3>
+ 800115a:	f7ff fabc 	bl	80006d6 <LL_DMA_ClearFlag_HT1>
     }
 
-    /* ── 3. Настройка адресов и длины ── */
-    /* RX: данные из SPI DR → g_fifo_data[bus][sensor] */
+    /* ── 4. Настройка адресов и длины ── */
+    /* RX: данные из SPI DR → g_fifo_data[bus_idx][sensor_idx] */
     LL_DMA_SetMemoryAddress(dma, rx_st,
                             (uint32_t)g_fifo_data[bus_idx][sensor_idx]);
  800115e:	7bfb      	ldrb	r3, [r7, #15]
@@ -2682,14 +2678,14 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80011c8:	69b8      	ldr	r0, [r7, #24]
  80011ca:	f7ff fa1b 	bl	8000604 <LL_DMA_SetDataLength>
 
-    /* ── 4. Разрешить TC-прерывание только для RX ──
-     * TX не нужно: завершение фиксируется по RX TC */
+    /* ── 5. Разрешить TC-прерывание только для RX ──
+     * TX прерывание не нужно: завершение фиксируется по RX TC */
     LL_DMA_EnableIT_TC(dma, rx_st);
  80011ce:	6979      	ldr	r1, [r7, #20]
  80011d0:	69b8      	ldr	r0, [r7, #24]
  80011d2:	f7ff fb19 	bl	8000808 <LL_DMA_EnableIT_TC>
 
-    /* ── 5. CS LOW — активировать датчик ── */
+    /* ── 6. CS LOW — активировать датчик ── */
     LL_GPIO_ResetOutputPin(sensor->cs_port, sensor->cs_pin);
  80011d6:	69fb      	ldr	r3, [r7, #28]
  80011d8:	685a      	ldr	r2, [r3, #4]
@@ -2699,7 +2695,7 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80011e0:	4610      	mov	r0, r2
  80011e2:	f7ff fc43 	bl	8000a6c <LL_GPIO_ResetOutputPin>
 
-    /* ── 6. Настройка SPI для DMA ── */
+    /* ── 7. Задать размер SPI-транзакции ── */
     LL_SPI_SetTransferSize(bus->spi, ICM_FIFO_DMA_BUF_SIZE);
  80011e6:	687b      	ldr	r3, [r7, #4]
  80011e8:	681b      	ldr	r3, [r3, #0]
@@ -2707,8 +2703,8 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80011ec:	4618      	mov	r0, r3
  80011ee:	f7ff fb4d 	bl	800088c <LL_SPI_SetTransferSize>
 
-    /* ── 7. Запуск: сначала RX-стрим, потом TX-стрим, затем SPI ──
-     * Порядок важен: RX должен быть готов принимать до начала TX */
+    /* ── 8. Запуск: RX-стрим → TX-стрим → SPI ──
+     * Порядок критичен: RX должен быть готов принимать до первого SCK */
     LL_DMA_EnableStream(dma, rx_st);
  80011f2:	6979      	ldr	r1, [r7, #20]
  80011f4:	69b8      	ldr	r0, [r7, #24]
@@ -2717,8 +2713,7 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
  80011fa:	6939      	ldr	r1, [r7, #16]
  80011fc:	69b8      	ldr	r0, [r7, #24]
  80011fe:	f7ff f99f 	bl	8000540 <LL_DMA_EnableStream>
-
-    SPI_EnableDMA(bus->spi); /* DMA-запросы + Enable + Start */
+    SPI_EnableDMA(bus->spi);
  8001202:	687b      	ldr	r3, [r7, #4]
  8001204:	681b      	ldr	r3, [r3, #0]
  8001206:	4618      	mov	r0, r3
@@ -2735,7 +2730,7 @@ static void BusBurstRead_Start(ICM_Bus_t *bus, uint8_t sensor_idx)
 08001220 <BusFinalize>:
  * больше нет исправных датчиков для опроса.
  *
- * Каскад: SPI1 → SPI4 → SPI5 → g_fifo_batch_ready = 1
+ * Каскад: SPI1 → SPI5 → SPI4 → g_fifo_batch_ready = 1
  * ================================================================ */
 static void BusFinalize(ICM_Bus_t *bus)
 {
@@ -2756,7 +2751,7 @@ static void BusFinalize(ICM_Bus_t *bus)
  8001232:	2200      	movs	r2, #0
  8001234:	f883 2070 	strb.w	r2, [r3, #112]	@ 0x70
 
-    /* Атомарное чтение-модификация не требуется: вызывается только из ISR */
+    /* Инкремент счётчика завершённых шин (только из ISR — атомарность не нужна) */
     cnt = ++g_buses_done_cnt;
  8001238:	4b26      	ldr	r3, [pc, #152]	@ (80012d4 <BusFinalize+0xb4>)
  800123a:	781b      	ldrb	r3, [r3, #0]
@@ -2775,8 +2770,8 @@ static void BusFinalize(ICM_Bus_t *bus)
  8001250:	4293      	cmp	r3, r2
  8001252:	d116      	bne.n	8001282 <BusFinalize+0x62>
     {
-        /* SPI1 завершена → запуск SPI4 */
-        first = Bus_FindNextOK(&g_bus_spi4, 0U);
+        /* SPI1 завершена → запуск SPI5 */
+        first = Bus_FindNextOK(&g_bus_spi5, 0U);
  8001254:	2100      	movs	r1, #0
  8001256:	4821      	ldr	r0, [pc, #132]	@ (80012dc <BusFinalize+0xbc>)
  8001258:	f7ff fc34 	bl	8000ac4 <Bus_FindNextOK>
@@ -2787,11 +2782,11 @@ static void BusFinalize(ICM_Bus_t *bus)
  8001262:	2b05      	cmp	r3, #5
  8001264:	d809      	bhi.n	800127a <BusFinalize+0x5a>
         {
-            g_bus_spi4.current_sensor_idx = first;
+            g_bus_spi5.current_sensor_idx = first;
  8001266:	4a1d      	ldr	r2, [pc, #116]	@ (80012dc <BusFinalize+0xbc>)
  8001268:	7bbb      	ldrb	r3, [r7, #14]
  800126a:	f882 3070 	strb.w	r3, [r2, #112]	@ 0x70
-            BusBurstRead_Start(&g_bus_spi4, first);
+            BusBurstRead_Start(&g_bus_spi5, first);
  800126e:	7bbb      	ldrb	r3, [r7, #14]
  8001270:	4619      	mov	r1, r3
  8001272:	481a      	ldr	r0, [pc, #104]	@ (80012dc <BusFinalize+0xbc>)
@@ -2803,17 +2798,17 @@ static void BusFinalize(ICM_Bus_t *bus)
     }
 }
  8001278:	e027      	b.n	80012ca <BusFinalize+0xaa>
-            BusFinalize(&g_bus_spi4);
+            BusFinalize(&g_bus_spi5);
  800127a:	4818      	ldr	r0, [pc, #96]	@ (80012dc <BusFinalize+0xbc>)
  800127c:	f7ff ffd0 	bl	8001220 <BusFinalize>
 }
  8001280:	e023      	b.n	80012ca <BusFinalize+0xaa>
-    else if (bus == &g_bus_spi4)
+    else if (bus == &g_bus_spi5)
  8001282:	687b      	ldr	r3, [r7, #4]
  8001284:	4a15      	ldr	r2, [pc, #84]	@ (80012dc <BusFinalize+0xbc>)
  8001286:	4293      	cmp	r3, r2
  8001288:	d116      	bne.n	80012b8 <BusFinalize+0x98>
-        first = Bus_FindNextOK(&g_bus_spi5, 0U);
+        first = Bus_FindNextOK(&g_bus_spi4, 0U);
  800128a:	2100      	movs	r1, #0
  800128c:	4814      	ldr	r0, [pc, #80]	@ (80012e0 <BusFinalize+0xc0>)
  800128e:	f7ff fc19 	bl	8000ac4 <Bus_FindNextOK>
@@ -2823,18 +2818,18 @@ static void BusFinalize(ICM_Bus_t *bus)
  8001296:	7bbb      	ldrb	r3, [r7, #14]
  8001298:	2b05      	cmp	r3, #5
  800129a:	d809      	bhi.n	80012b0 <BusFinalize+0x90>
-            g_bus_spi5.current_sensor_idx = first;
+            g_bus_spi4.current_sensor_idx = first;
  800129c:	4a10      	ldr	r2, [pc, #64]	@ (80012e0 <BusFinalize+0xc0>)
  800129e:	7bbb      	ldrb	r3, [r7, #14]
  80012a0:	f882 3070 	strb.w	r3, [r2, #112]	@ 0x70
-            BusBurstRead_Start(&g_bus_spi5, first);
+            BusBurstRead_Start(&g_bus_spi4, first);
  80012a4:	7bbb      	ldrb	r3, [r7, #14]
  80012a6:	4619      	mov	r1, r3
  80012a8:	480d      	ldr	r0, [pc, #52]	@ (80012e0 <BusFinalize+0xc0>)
  80012aa:	f7ff fee7 	bl	800107c <BusBurstRead_Start>
 }
  80012ae:	e00c      	b.n	80012ca <BusFinalize+0xaa>
-            BusFinalize(&g_bus_spi5);
+            BusFinalize(&g_bus_spi4);
  80012b0:	480b      	ldr	r0, [pc, #44]	@ (80012e0 <BusFinalize+0xc0>)
  80012b2:	f7ff ffb5 	bl	8001220 <BusFinalize>
 }
@@ -2866,7 +2861,7 @@ static void BusFinalize(ICM_Bus_t *bus)
 080012e8 <BusBurstRead_Next>:
  * переход к следующему или завершение шины.
  *
- * Вызывается из ICM_DMA_RxComplete_SPI1/4/5().
+ * Вызывается из ICM_DMA_RxComplete_SPI1/5/4().
  * ================================================================ */
 static void BusBurstRead_Next(ICM_Bus_t *bus, uint8_t prev_idx)
 {
@@ -2906,7 +2901,7 @@ static void BusBurstRead_Next(ICM_Bus_t *bus, uint8_t prev_idx)
  800131a:	f7ff fb99 	bl	8000a50 <LL_GPIO_SetOutputPin>
                          bus->sensors[prev_idx].cs_pin);
 
-    /* ── Найти следующий исправный датчик ── */
+    /* ── Найти следующий исправный датчик на этой же шине ── */
     next = Bus_FindNextOK(bus, (uint8_t)(prev_idx + 1U));
  800131e:	78fb      	ldrb	r3, [r7, #3]
  8001320:	3301      	adds	r3, #1
@@ -2922,7 +2917,7 @@ static void BusBurstRead_Next(ICM_Bus_t *bus, uint8_t prev_idx)
  8001332:	2b05      	cmp	r3, #5
  8001334:	d809      	bhi.n	800134a <BusBurstRead_Next+0x62>
     {
-        /* Есть ещё исправные датчики на этой шине — продолжаем каскад */
+        /* Есть ещё исправные датчики — продолжаем каскад на той же шине */
         bus->current_sensor_idx = next;
  8001336:	687b      	ldr	r3, [r7, #4]
  8001338:	7bfa      	ldrb	r2, [r7, #15]
@@ -2934,7 +2929,7 @@ static void BusBurstRead_Next(ICM_Bus_t *bus, uint8_t prev_idx)
  8001344:	f7ff fe9a 	bl	800107c <BusBurstRead_Start>
     else
     {
-        /* Все датчики шины опрошены (или пропущены) — финализация */
+        /* Все датчики шины опрошены (или пропущены) — финализация шины */
         BusFinalize(bus);
     }
 }
@@ -2949,7 +2944,7 @@ static void BusBurstRead_Next(ICM_Bus_t *bus, uint8_t prev_idx)
  8001356:	bd80      	pop	{r7, pc}
 
 08001358 <ICM_StartBurstRead>:
- * Запускает новый цикл DMA-опроса всех трёх шин.
+ * Запускает новый цикл DMA-опроса (каскад SPI1 → SPI5 → SPI4).
  * Если предыдущий цикл не был обработан main-loop (g_fifo_batch_ready=1),
  * функция пропускает запуск — защита от перетекания буферов.
  * ================================================================ */
@@ -2976,11 +2971,11 @@ void ICM_StartBurstRead(void)
  8001368:	4b15      	ldr	r3, [pc, #84]	@ (80013c0 <ICM_StartBurstRead+0x68>)
  800136a:	2200      	movs	r2, #0
  800136c:	f883 2116 	strb.w	r2, [r3, #278]	@ 0x116
-    g_bus_spi4.transfer_complete = 0U;
+    g_bus_spi5.transfer_complete = 0U;
  8001370:	4b14      	ldr	r3, [pc, #80]	@ (80013c4 <ICM_StartBurstRead+0x6c>)
  8001372:	2200      	movs	r2, #0
  8001374:	f883 2116 	strb.w	r2, [r3, #278]	@ 0x116
-    g_bus_spi5.transfer_complete = 0U;
+    g_bus_spi4.transfer_complete = 0U;
  8001378:	4b13      	ldr	r3, [pc, #76]	@ (80013c8 <ICM_StartBurstRead+0x70>)
  800137a:	2200      	movs	r2, #0
  800137c:	f883 2116 	strb.w	r2, [r3, #278]	@ 0x116
@@ -2989,7 +2984,7 @@ void ICM_StartBurstRead(void)
  8001382:	2200      	movs	r2, #0
  8001384:	701a      	strb	r2, [r3, #0]
 
-    /* Запустить первый исправный датчик SPI1 */
+    /* Запустить первый исправный датчик SPI1 (начало каскада) */
     first = Bus_FindNextOK(&g_bus_spi1, 0U);
  8001386:	2100      	movs	r1, #0
  8001388:	480d      	ldr	r0, [pc, #52]	@ (80013c0 <ICM_StartBurstRead+0x68>)
@@ -3014,7 +3009,7 @@ void ICM_StartBurstRead(void)
     }
     else
     {
-        /* Все датчики SPI1 неисправны — запустить каскад с SPI4 */
+        /* Все датчики SPI1 неисправны — запустить каскад с SPI5 */
         BusFinalize(&g_bus_spi1);
  80013ac:	4804      	ldr	r0, [pc, #16]	@ (80013c0 <ICM_StartBurstRead+0x68>)
  80013ae:	f7ff ff37 	bl	8001220 <BusFinalize>
@@ -3033,8 +3028,8 @@ void ICM_StartBurstRead(void)
  80013cc:	24001a38 	.word	0x24001a38
 
 080013d0 <ICM_DMA_RxComplete_SPI1>:
- *   LL_DMA_ClearFlag_TC0(DMA2);  // для SPI4
- *   LL_DMA_ClearFlag_TC2(DMA2);  // для SPI5
+ *       }
+ *   }
  * ================================================================ */
 
 void ICM_DMA_RxComplete_SPI1(void)
@@ -3053,17 +3048,17 @@ void ICM_DMA_RxComplete_SPI1(void)
  80013e6:	bf00      	nop
  80013e8:	24000000 	.word	0x24000000
 
-080013ec <ICM_DMA_RxComplete_SPI4>:
+080013ec <ICM_DMA_RxComplete_SPI5>:
 
-void ICM_DMA_RxComplete_SPI4(void)
+void ICM_DMA_RxComplete_SPI5(void)
 {
  80013ec:	b580      	push	{r7, lr}
  80013ee:	af00      	add	r7, sp, #0
-    BusBurstRead_Next(&g_bus_spi4, g_bus_spi4.current_sensor_idx);
- 80013f0:	4b04      	ldr	r3, [pc, #16]	@ (8001404 <ICM_DMA_RxComplete_SPI4+0x18>)
+    BusBurstRead_Next(&g_bus_spi5, g_bus_spi5.current_sensor_idx);
+ 80013f0:	4b04      	ldr	r3, [pc, #16]	@ (8001404 <ICM_DMA_RxComplete_SPI5+0x18>)
  80013f2:	f893 3070 	ldrb.w	r3, [r3, #112]	@ 0x70
  80013f6:	4619      	mov	r1, r3
- 80013f8:	4802      	ldr	r0, [pc, #8]	@ (8001404 <ICM_DMA_RxComplete_SPI4+0x18>)
+ 80013f8:	4802      	ldr	r0, [pc, #8]	@ (8001404 <ICM_DMA_RxComplete_SPI5+0x18>)
  80013fa:	f7ff ff75 	bl	80012e8 <BusBurstRead_Next>
 }
  80013fe:	bf00      	nop
@@ -3071,17 +3066,17 @@ void ICM_DMA_RxComplete_SPI4(void)
  8001402:	bf00      	nop
  8001404:	24000118 	.word	0x24000118
 
-08001408 <ICM_DMA_RxComplete_SPI5>:
+08001408 <ICM_DMA_RxComplete_SPI4>:
 
-void ICM_DMA_RxComplete_SPI5(void)
+void ICM_DMA_RxComplete_SPI4(void)
 {
  8001408:	b580      	push	{r7, lr}
  800140a:	af00      	add	r7, sp, #0
-    BusBurstRead_Next(&g_bus_spi5, g_bus_spi5.current_sensor_idx);
- 800140c:	4b04      	ldr	r3, [pc, #16]	@ (8001420 <ICM_DMA_RxComplete_SPI5+0x18>)
+    BusBurstRead_Next(&g_bus_spi4, g_bus_spi4.current_sensor_idx);
+ 800140c:	4b04      	ldr	r3, [pc, #16]	@ (8001420 <ICM_DMA_RxComplete_SPI4+0x18>)
  800140e:	f893 3070 	ldrb.w	r3, [r3, #112]	@ 0x70
  8001412:	4619      	mov	r1, r3
- 8001414:	4802      	ldr	r0, [pc, #8]	@ (8001420 <ICM_DMA_RxComplete_SPI5+0x18>)
+ 8001414:	4802      	ldr	r0, [pc, #8]	@ (8001420 <ICM_DMA_RxComplete_SPI4+0x18>)
  8001416:	f7ff ff67 	bl	80012e8 <BusBurstRead_Next>
 }
  800141a:	bf00      	nop
@@ -9771,7 +9766,7 @@ void DMA2_Stream0_IRQHandler(void)
  8003ab8:	4803      	ldr	r0, [pc, #12]	@ (8003ac8 <DMA2_Stream0_IRQHandler+0x20>)
  8003aba:	f7ff ff06 	bl	80038ca <LL_DMA_ClearFlag_TC0>
 	        ICM_DMA_RxComplete_SPI4();
- 8003abe:	f7fd fc95 	bl	80013ec <ICM_DMA_RxComplete_SPI4>
+ 8003abe:	f7fd fca3 	bl	8001408 <ICM_DMA_RxComplete_SPI4>
 	    }
   /* USER CODE END DMA2_Stream0_IRQn 0 */
   /* USER CODE BEGIN DMA2_Stream0_IRQn 1 */
@@ -9825,7 +9820,7 @@ void DMA2_Stream2_IRQHandler(void)
  8003aec:	4803      	ldr	r0, [pc, #12]	@ (8003afc <DMA2_Stream2_IRQHandler+0x20>)
  8003aee:	f7ff ff07 	bl	8003900 <LL_DMA_ClearFlag_TC2>
 	        ICM_DMA_RxComplete_SPI5();
- 8003af2:	f7fd fc89 	bl	8001408 <ICM_DMA_RxComplete_SPI5>
+ 8003af2:	f7fd fc7b 	bl	80013ec <ICM_DMA_RxComplete_SPI5>
 	    }
   /* USER CODE END DMA2_Stream2_IRQn 0 */
   /* USER CODE BEGIN DMA2_Stream2_IRQn 1 */
