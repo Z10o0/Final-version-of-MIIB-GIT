@@ -123,25 +123,15 @@ int main(void)
   MX_SPI4_Init();
   MX_USART1_UART_Init();
   MX_SPI5_Init();
+
+  LL_SPI_SetInternalSSLevel(SPI5, LL_SPI_SS_LEVEL_HIGH); /* SSI=1 */
+  LL_SPI_Enable(SPI5);
+
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
 
-  /* Запуск TIM7 до инициализации — используется в Delay_ms() внутри ICM_InitAllSensors */
-  LL_TIM_EnableCounter(TIM7);
-  LL_TIM_SetCounter(TIM7, 0);
-
-  /* Инициализация GPIO CS, активация SPI-шин */
   ICM_BusesInit();
-
-  /* Конфигурация всех 18 датчиков ICM-45686 через SPI.
-   * Возвращает маску неисправных датчиков (uint32_t).
-   * 0 = все исправны. При ненулевой маске неисправные датчики
-   * будут давать нули в UART-пакете, система продолжает работу. */
-  if (ICM_InitAllSensors() == 0xFFFFFFFF)
-  {
-    /* Все 18 датчиков не ответили — критическая ошибка */
-    Error_Handler();
-  }
+  uint32_t imu_faults = ICM_InitAllSensors();
 
   /* Инициализация UART-телеметрии (DMA TX) */
   UART_Telemetry_Init();
@@ -158,12 +148,19 @@ int main(void)
   {
     /* Флаг g_fifo_batch_ready устанавливается в ISR после завершения
        DMA-чтения всех трёх шин. Основной цикл — только парсинг и отправка. */
-    if (g_fifo_batch_ready)
-    {
-      g_fifo_batch_ready = 0;    /* Сброс ДО разбора, чтобы ISR мог выставить снова */
-      ICM_ParseAllFIFO();        /* Разбор сырых FIFO-данных в структуры измерений  */
-      UART_SendBatch();          /* Неблокирующая отправка пакета телеметрии по DMA  */
-    }
+	  if (g_fifo_batch_ready != 0U)
+	  {
+	      g_fifo_batch_ready = 0U;
+
+	      /*
+	       * Парсер должен брать полезные FIFO байты с [1]:
+	       * g_fifo_data[bus][imu][1].
+	       * g_fifo_data[bus][imu][0] — ответ на командный байт FIFO_DATA.
+	       */
+	      ICM_ParseAllFIFO();
+
+	      UART_SendBatch();
+	  }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -1293,43 +1290,6 @@ void MPU_Config(void)
 {
     LL_MPU_Disable();
 
-    /* Регион 0: запретить весь диапазон по умолчанию */
-    LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER0, 0x87, 0x0,
-        LL_MPU_REGION_SIZE_4GB | LL_MPU_TEX_LEVEL0 |
-        LL_MPU_REGION_NO_ACCESS | LL_MPU_INSTRUCTION_ACCESS_DISABLE |
-        LL_MPU_ACCESS_SHAREABLE | LL_MPU_ACCESS_NOT_CACHEABLE |
-        LL_MPU_ACCESS_NOT_BUFFERABLE);
-
-    /* Регион 1: Flash — RO, кешируемая */
-    LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER1, 0x00, 0x08000000,
-        LL_MPU_REGION_SIZE_2MB | LL_MPU_TEX_LEVEL0 |
-        LL_MPU_REGION_FULL_ACCESS | LL_MPU_INSTRUCTION_ACCESS_ENABLE |
-        LL_MPU_ACCESS_NOT_SHAREABLE | LL_MPU_ACCESS_CACHEABLE |
-        LL_MPU_ACCESS_NOT_BUFFERABLE);
-
-    /* Регион 2: DTCM (0x20000000, 128KB) — для стека/BSS ядра */
-    LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER2, 0x00, 0x20000000,
-        LL_MPU_REGION_SIZE_128KB | LL_MPU_TEX_LEVEL1 |
-        LL_MPU_REGION_FULL_ACCESS | LL_MPU_INSTRUCTION_ACCESS_DISABLE |
-        LL_MPU_ACCESS_NOT_SHAREABLE | LL_MPU_ACCESS_NOT_CACHEABLE |
-        LL_MPU_ACCESS_NOT_BUFFERABLE);
-
-    /* Регион 3: AXI SRAM D1 (0x24000000, 512KB) — DMA-буферы */
-    /* Normal, Non-cacheable, Non-shareable — для DMA */
-    LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER3, 0x00, 0x24000000,
-        LL_MPU_REGION_SIZE_512KB | LL_MPU_TEX_LEVEL1 |
-        LL_MPU_REGION_FULL_ACCESS | LL_MPU_INSTRUCTION_ACCESS_DISABLE |
-        LL_MPU_ACCESS_NOT_SHAREABLE | LL_MPU_ACCESS_NOT_CACHEABLE |
-        LL_MPU_ACCESS_NOT_BUFFERABLE);
-
-    /* Регион 4: SRAM D2 (0x30000000, 288KB) — AHB периферия DMA */
-    LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER4, 0x00, 0x30000000,
-        LL_MPU_REGION_SIZE_256KB | LL_MPU_TEX_LEVEL1 |
-        LL_MPU_REGION_FULL_ACCESS | LL_MPU_INSTRUCTION_ACCESS_DISABLE |
-        LL_MPU_ACCESS_NOT_SHAREABLE | LL_MPU_ACCESS_NOT_CACHEABLE |
-        LL_MPU_ACCESS_NOT_BUFFERABLE);
-
-    LL_MPU_Enable(LL_MPU_CTRL_PRIVILEGED_DEFAULT);
 }
 
 /**

@@ -1,17 +1,3 @@
-/**
- * @file    icm45686_config.h
- * @brief   Централизованная конфигурация всех 18 датчиков ICM-45686.
- *
- *          *** ЕДИНСТВЕННЫЙ ФАЙЛ для изменения параметров датчиков ***
- *
- *          Для изменения ODR или диапазона — поменяйте только макросы
- *          ICM_GYRO_ODR, ICM_ACCEL_ODR, ICM_GYRO_FS, ICM_ACCEL_FS.
- *
- *          Переход на 6400 Гц: заменить ICM_GYRO_ODR_VALUE и
- *          ICM_ACCEL_ODR_VALUE на ICM45686_GYRO_ODR_6400HZ /
- *          ICM45686_ACCEL_ODR_6400HZ и пересчитать FIFO_POLL_COUNT.
- */
-
 #ifndef ICM45686_CONFIG_H
 #define ICM45686_CONFIG_H
 
@@ -21,71 +7,52 @@ extern "C" {
 
 #include "icm45686_regs.h"
 
-/* ================================================================
- * ПАРАМЕТРЫ ODR (частота выдачи данных)
- * ================================================================ */
+/* Число IMU */
+#define ICM_SENSORS_PER_BUS                   6U
+#define ICM_TOTAL_SENSORS                     18U
+#define ICM_SPI_BUS_COUNT                     3U
 
-/**
- * @brief Целевая ODR датчиков.
- *        Текущее значение: 3200 Гц
- *        Для перехода на 6400 Гц: заменить оба макроса на 6400HZ-варианты
- *        и изменить ICM_FIFO_POLL_PACKETS с 10 на 20
- *        (20 пакетов * 50 Гц опроса = 1000 пакетов/с на датчик → покрывает 6400 Гц)
+/* Текущая рабочая конфигурация */
+#define ICM_GYRO_ODR_VALUE                    ICM45686_GYRO_ODR_3200HZ
+#define ICM_ACCEL_ODR_VALUE                   ICM45686_ACCEL_ODR_3200HZ
+
+#define ICM_GYRO_FS_VALUE                     ICM45686_GYRO_FS_2000DPS
+#define ICM_ACCEL_FS_VALUE                    ICM45686_ACCEL_FS_16G
+
+/*
+ * При ODR 3200 Гц и TIM6 = 320 Гц:
+ * 10 измерений в FIFO за 3.125 мс.
+ *
+ * Для 6400 Гц при прежнем TIM6 = 320 Гц:
+ * изменить на 20U.
  */
-#define ICM_GYRO_ODR_VALUE          ICM45686_GYRO_ODR_3200HZ
-#define ICM_ACCEL_ODR_VALUE         ICM45686_ACCEL_ODR_3200HZ
+#define ICM_FIFO_POLL_PACKETS                 10U
 
-/* ================================================================
- * ПАРАМЕТРЫ ДИАПАЗОНОВ ИЗМЕРЕНИЙ
- * ================================================================ */
-
-/**
- * @brief Диапазон гироскопа.
- *        Текущее значение: ±2000 °/с
- *        Доступные варианты: ICM45686_GYRO_FS_4000DPS / 2000 / 1000 / 500 / 250 / 125 ...
+/*
+ * accel XYZ + gyro XYZ + temperature + timestamp:
+ * header(1) + accel(6) + gyro(6) + temp(1) + tmst(2) = 16 байт.
  */
-#define ICM_GYRO_FS_VALUE           ICM45686_GYRO_FS_2000DPS
+#define ICM_FIFO_PACKET_BYTES                 ICM45686_FIFO_PACKET_SIZE_16BIT
 
-/**
- * @brief Диапазон акселерометра.
- *        Текущее значение: ±16 g
- *        Доступные варианты: ICM45686_ACCEL_FS_16G / 8G / 4G / 2G
+#define ICM_FIFO_PAYLOAD_BYTES \
+    (ICM_FIFO_POLL_PACKETS * ICM_FIFO_PACKET_BYTES)
+
+/*
+ * Один дополнительный байт обязателен:
+ * rx[0] — мусорный байт, принятый во время передачи адреса FIFO_DATA.
+ * Полезные FIFO данные: rx[1]...rx[ICM_FIFO_PAYLOAD_BYTES].
  */
-#define ICM_ACCEL_FS_VALUE          ICM45686_ACCEL_FS_16G
+#define ICM_FIFO_DMA_BUF_SIZE                 (ICM_FIFO_PAYLOAD_BYTES + 1U)
 
-/* ================================================================
- * ПАРАМЕТРЫ FIFO
- * ================================================================ */
+#define ICM_FIFO_WATERMARK_BYTES              ICM_FIFO_PAYLOAD_BYTES
 
-/**
- * @brief Количество пакетов в FIFO перед считыванием.
- *        При ODR=3200 Гц, 10 пакетов — опрос выполняется каждые ~3.125 мс.
- *        При ODR=6400 Гц установить значение 20.
+#define ICM_WHOAMI_EXPECTED                   ICM45686_WHO_AM_I_VALUE
+
+/*
+ * TIM6 должен вызывать ICM_StartBurstRead() с периодом:
+ * 3200 / 10 = 320 Гц, то есть раз в 3125 мкс.
  */
-#define ICM_FIFO_POLL_PACKETS       10U
-
-/**
- * @brief Размер FIFO пакета в байтах (16-бит режим, без HIRES).
- *        Header(1) + Accel(6) + Gyro(6) + Temp(1) + Timestamp(2) = 16 байт
- */
-#define ICM_FIFO_PACKET_BYTES       ICM45686_FIFO_PACKET_SIZE_16BIT
-
-/**
- * @brief Суммарный размер DMA-буфера на один датчик (в байтах).
- *        +2 байта: адресный байт команды чтения + фиктивный первый байт ответа SPI
- */
-#define ICM_FIFO_DMA_BUF_SIZE       (ICM_FIFO_POLL_PACKETS * ICM_FIFO_PACKET_BYTES + 2U)
-
-/* ================================================================
- * ИДЕНТИФИКАЦИЯ ЧИПА
- * ================================================================ */
-#define ICM_WHOAMI_EXPECTED         ICM45686_WHO_AM_I_VALUE
-
-/* ================================================================
- * ЧИСЛО ДАТЧИКОВ НА КАЖДОЙ ШИНЕ
- * ================================================================ */
-#define ICM_SENSORS_PER_BUS         6U     /* 6 датчиков на шину */
-#define ICM_TOTAL_SENSORS           18U    /* итого 18 датчиков */
+#define ICM_POLL_RATE_HZ                      320U
 
 #ifdef __cplusplus
 }

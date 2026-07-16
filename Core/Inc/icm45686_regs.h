@@ -1,63 +1,3 @@
-/**
- * @file    icm45686_regs.h
- * @brief   Адресная карта регистров ICM-45686.
- *
- *          Источник: TDK InvenSense Reference Driver
- *          (tdk-invn-oss/motion.mcu.icm45686.driver)
- *          Дополнено регистрами косвенного доступа (IREG) для
- *          поддержки внешнего тактирования через пин CLKIN.
- *
- * ──────────────────────────────────────────────────────────────
- *  АРХИТЕКТУРА АДРЕСНОГО ПРОСТРАНСТВА ICM-45686
- * ──────────────────────────────────────────────────────────────
- *  Датчик имеет два уровня адресного пространства:
- *
- *  1) USER BANK 0 (прямой SPI-доступ, addr 0x00..0x7F):
- *     Регистры управления, конфигурации, FIFO, прерываний.
- *     Доступны обычной 2-байтовой SPI-транзакцией:
- *       [addr | RW_bit] [data]
- *
- *  2) INTERNAL REGISTERS — IREG (косвенный доступ):
- *     Внутренние регистры трёх блоков:
- *       IPREG_TOP1 (база 0xA400) — тактирование, RTC, PAD-сценарии
- *       IPREG_SYS1 (база 0xA000) — калибровка, таймеры
- *       IPREG_SYS2 (база 0xA200) — расширенные настройки
- *
- *     Доступ к IREG — трёхшаговая процедура через USER BANK 0:
- *       a) Записать старший байт 16-битного адреса в IREG_ADDR_15_8
- *       b) Записать младший байт адреса в IREG_ADDR_7_0
- *       c) Прочитать/записать данные через IREG_DATA
- *          (аппаратура выполняет транзакцию автоматически)
- *     Задержка после записи в IREG_DATA — минимум 10 мкс!
- *
- * ──────────────────────────────────────────────────────────────
- *  ПОРЯДОК ИНИЦИАЛИЗАЦИИ ПРИ ИСПОЛЬЗОВАНИИ CLKIN
- * ──────────────────────────────────────────────────────────────
- *  ВАЖНО: CLKIN необходимо активировать ДО включения гироскопа
- *  и акселерометра (до записи в PWR_MGMT0). Нарушение порядка
- *  приводит к тому, что датчик использует внутренний RC-генератор
- *  и игнорирует внешний сигнал на пине CLKIN.
- *
- *  Обязательная последовательность (см. icm45686_spi.c):
- *    1. Сброс (DEVICE_CONFIG[0] = 1), задержка >= 1 мс
- *    2. Проверка WHO_AM_I (ожидается 0xE9)
- *    3. Выбор банка 0 (BANK_SEL = 0x00)
- *    4. IREG: включить CLKIN через IOC_PAD_SCENARIO_OVRD (0xA430)
- *    5. IREG: включить RTC_MODE через SMC_CONTROL_0 (0xA458)
- *    6. Конфигурация ACCEL_CONFIG0 (FS + ODR)
- *    7. Конфигурация GYRO_CONFIG0  (FS + ODR)
- *    8. Конфигурация FIFO_CONFIG0  (режим + выборка каналов)
- *    9. Порог FIFO (FIFO_CONFIG1_0 / FIFO_CONFIG1_1)
- *   10. Включение питания PWR_MGMT0 (gyro LN + accel LN)
- *   11. Задержка >= 200 мс (прогрев гироскопа)
- *
- *  Допустимый диапазон частоты CLKIN: 32 768 Гц ± 280 ppm
- *  (т.е. от ~32 759 Гц до ~32 777 Гц).
- *  При использовании внешнего генератора 32.768 кГц (стандартный
- *  часовой кристалл) данный диапазон выдерживается.
- *  НЕ подавать на CLKIN сигналы другой частоты (например 1 МГц)!
- */
-
 #ifndef ICM45686_REGS_H
 #define ICM45686_REGS_H
 
@@ -65,431 +5,200 @@
 extern "C" {
 #endif
 
-/* ================================================================
- * USER BANK 0 — основные регистры (прямой SPI-доступ)
- * ================================================================ */
+#include <stdint.h>
 
-/* ----------------------------------------------------------------
- * Идентификация устройства
- * ---------------------------------------------------------------- */
-/**
- * WHO_AM_I (адрес 0x72, только чтение)
- * Содержит фиксированный код 0xE9, позволяющий убедиться,
- * что устройство присутствует и SPI-соединение корректно.
+/* ========================================================================== */
+/*                         USER BANK 0                                        */
+/* ========================================================================== */
+
+/* Данные и питание */
+#define ICM45686_REG_PWR_MGMT0               0x10U
+#define ICM45686_REG_FIFO_COUNT_0            0x12U
+#define ICM45686_REG_FIFO_COUNT_1            0x13U
+#define ICM45686_REG_FIFO_DATA               0x14U
+
+/* INT1 */
+#define ICM45686_REG_INT1_CONFIG0            0x16U
+#define ICM45686_REG_INT1_CONFIG1            0x17U
+#define ICM45686_REG_INT1_CONFIG2            0x18U
+#define ICM45686_REG_INT1_STATUS0            0x19U
+#define ICM45686_REG_INT1_STATUS1            0x1AU
+
+/* Конфигурация датчиков */
+#define ICM45686_REG_ACCEL_CONFIG0           0x1BU
+#define ICM45686_REG_GYRO_CONFIG0            0x1CU
+
+/* FIFO */
+#define ICM45686_REG_FIFO_CONFIG0            0x1DU
+#define ICM45686_REG_FIFO_CONFIG10           0x1EU
+#define ICM45686_REG_FIFO_CONFIG11           0x1FU
+#define ICM45686_REG_FIFO_CONFIG2            0x20U
+#define ICM45686_REG_FIFO_CONFIG3            0x21U
+#define ICM45686_REG_FIFO_CONFIG4            0x22U
+
+/* RTC / clock */
+#define ICM45686_REG_TMST_WOM_CONFIG         0x23U
+#define ICM45686_REG_RTC_CONFIG              0x26U
+#define ICM45686_REG_REG_MISC1               0x35U
+
+/* Идентификация и IREG */
+#define ICM45686_REG_WHO_AM_I                0x72U
+#define ICM45686_REG_IREG_ADDR_15_8          0x7CU
+#define ICM45686_REG_IREG_ADDR_7_0           0x7DU
+#define ICM45686_REG_IREG_DATA               0x7EU
+#define ICM45686_REG_REG_MISC2               0x7FU
+
+#define ICM45686_WHO_AM_I_VALUE              0xE9U
+#define ICM45686_SPI_READ_BIT                0x80U
+
+/* ========================================================================== */
+/*                         PWR_MGMT0                                           */
+/* ========================================================================== */
+
+#define ICM45686_PWR_GYRO_MODE_OFF           (0x00U << 2)
+#define ICM45686_PWR_GYRO_MODE_STANDBY       (0x01U << 2)
+#define ICM45686_PWR_GYRO_MODE_LP            (0x02U << 2)
+#define ICM45686_PWR_GYRO_MODE_LN            (0x03U << 2)
+
+#define ICM45686_PWR_ACCEL_MODE_OFF          0x00U
+#define ICM45686_PWR_ACCEL_MODE_LP           0x02U
+#define ICM45686_PWR_ACCEL_MODE_LN           0x03U
+
+/* ========================================================================== */
+/*                         ACCEL_CONFIG0                                      */
+/* ========================================================================== */
+
+/* ACCEL_UI_FS_SEL: биты [6:4] */
+#define ICM45686_ACCEL_FS_32G                (0x00U << 4)
+#define ICM45686_ACCEL_FS_16G                (0x01U << 4)
+#define ICM45686_ACCEL_FS_8G                 (0x02U << 4)
+#define ICM45686_ACCEL_FS_4G                 (0x03U << 4)
+#define ICM45686_ACCEL_FS_2G                 (0x04U << 4)
+
+/* ACCEL_ODR: биты [3:0] */
+#define ICM45686_ACCEL_ODR_6400HZ            0x03U
+#define ICM45686_ACCEL_ODR_3200HZ            0x04U
+#define ICM45686_ACCEL_ODR_1600HZ            0x05U
+#define ICM45686_ACCEL_ODR_800HZ             0x06U
+#define ICM45686_ACCEL_ODR_400HZ             0x07U
+#define ICM45686_ACCEL_ODR_200HZ             0x08U
+#define ICM45686_ACCEL_ODR_100HZ             0x09U
+#define ICM45686_ACCEL_ODR_50HZ              0x0AU
+
+/* ========================================================================== */
+/*                         GYRO_CONFIG0                                       */
+/* ========================================================================== */
+
+/* GYRO_UI_FS_SEL: биты [7:4] */
+#define ICM45686_GYRO_FS_4000DPS             (0x00U << 4)
+#define ICM45686_GYRO_FS_2000DPS             (0x01U << 4)
+#define ICM45686_GYRO_FS_1000DPS             (0x02U << 4)
+#define ICM45686_GYRO_FS_500DPS              (0x03U << 4)
+#define ICM45686_GYRO_FS_250DPS              (0x04U << 4)
+#define ICM45686_GYRO_FS_125DPS              (0x05U << 4)
+#define ICM45686_GYRO_FS_62_5DPS             (0x06U << 4)
+#define ICM45686_GYRO_FS_31_25DPS            (0x07U << 4)
+
+#define ICM45686_GYRO_ODR_6400HZ             0x03U
+#define ICM45686_GYRO_ODR_3200HZ             0x04U
+#define ICM45686_GYRO_ODR_1600HZ             0x05U
+#define ICM45686_GYRO_ODR_800HZ              0x06U
+#define ICM45686_GYRO_ODR_400HZ              0x07U
+#define ICM45686_GYRO_ODR_200HZ              0x08U
+#define ICM45686_GYRO_ODR_100HZ              0x09U
+#define ICM45686_GYRO_ODR_50HZ               0x0AU
+
+/* ========================================================================== */
+/*                         FIFO                                                */
+/* ========================================================================== */
+
+/* FIFO_CONFIG0 */
+#define ICM45686_FIFO_MODE_BYPASS            (0x00U << 6)
+#define ICM45686_FIFO_MODE_STREAM            (0x01U << 6)
+#define ICM45686_FIFO_MODE_STOP_ON_FULL      (0x02U << 6)
+#define ICM45686_FIFO_DEPTH_2K               (0x00U << 4)
+#define ICM45686_FIFO_DEPTH_8K               (0x07U << 4)
+
+/* FIFO_CONFIG2 */
+#define ICM45686_FIFO_FLUSH                  (1U << 7)
+#define ICM45686_FIFO_WM_GREATER_EQUAL       (1U << 3)
+
+/* FIFO_CONFIG3 */
+#define ICM45686_FIFO_IF_EN                  (1U << 0)
+#define ICM45686_FIFO_ACCEL_EN               (1U << 1)
+#define ICM45686_FIFO_GYRO_EN                (1U << 2)
+#define ICM45686_FIFO_HIRES_EN               (1U << 3)
+
+/* FIFO_CONFIG4 */
+#define ICM45686_FIFO_COMP_EN                (1U << 2)
+#define ICM45686_FIFO_TMST_FSYNC_EN          (1U << 1)
+
+/* FIFO header */
+#define ICM45686_FIFO_HEADER_ACCEL_BIT       (1U << 6)
+#define ICM45686_FIFO_HEADER_GYRO_BIT        (1U << 5)
+#define ICM45686_FIFO_HEADER_HIRES_BIT       (1U << 4)
+#define ICM45686_FIFO_HEADER_TMST_BIT        (1U << 3)
+#define ICM45686_FIFO_HEADER_FSYNC_BIT       (1U << 2)
+
+#define ICM45686_FIFO_PACKET_SIZE_16BIT      16U
+#define ICM45686_FIFO_PACKET_SIZE_HIRES      20U
+#define ICM45686_FIFO_SIZE_BYTES             2048U
+
+/* ========================================================================== */
+/*                         Reset / external clock                             */
+/* ========================================================================== */
+
+/* REG_MISC2 */
+#define ICM45686_SOFT_RESET                  (1U << 1)
+
+/* REG_MISC1, поле OSC_ID_OVRD[3:0] */
+#define ICM45686_OSC_ID_OVRD_DEFAULT         0x00U
+#define ICM45686_OSC_ID_OVRD_RC              0x02U
+#define ICM45686_OSC_ID_OVRD_EXT_CLK         0x08U
+
+/* INT1_CONFIG1 / INT1_STATUS1 */
+#define ICM45686_INT1_PLL_RDY_EN             (1U << 0)
+#define ICM45686_INT1_STATUS_PLL_RDY         (1U << 0)
+
+/* RTC_CONFIG */
+#define ICM45686_RTC_MODE_EN                 (1U << 5)
+#define ICM45686_RTC_ALIGN_EN                (1U << 6)
+
+/* ========================================================================== */
+/*                         Косвенный доступ IREG                              */
+/* ========================================================================== */
+
+/*
+ * IPREG_TOP1 имеет базовый адрес 0xA200.
+ * IOC_PAD_SCENARIO_OVRD: 0xA230.
+ * SMC_CONTROL_0:          0xA258.
  */
-#define ICM45686_REG_WHO_AM_I                   0x72U
-#define ICM45686_WHO_AM_I_VALUE                 0xE9U   /* ожидаемое значение */
+#define ICM45686_IREG_TOP1_ADDR_H             0xA2U
 
-/* ----------------------------------------------------------------
- * Управление питанием
- * ---------------------------------------------------------------- */
-/**
- * PWR_MGMT0 (адрес 0x10, чтение/запись)
- * Управляет режимами работы гироскопа и акселерометра.
- * Биты [3:2] — режим гироскопа (GYRO_MODE).
- * Биты [1:0] — режим акселерометра (ACCEL_MODE).
- * ВНИМАНИЕ: записывать ТОЛЬКО ПОСЛЕ настройки CLKIN (шаги 4,5).
+#define ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L 0x30U
+#define ICM45686_IREG_SMC_CONTROL_0_L         0x58U
+
+/* IOC_PAD_SCENARIO_OVRD: включить функцию CLKIN на pin 9 */
+#define ICM45686_CLKIN_ENABLE_VAL             0x06U
+
+/*
+ * SMC_CONTROL_0:
+ * bit 4: ACCEL_LP_CLK_SEL;
+ * bit 0: TMST_EN.
  */
-#define ICM45686_REG_PWR_MGMT0                  0x10U
+#define ICM45686_SMC_ACCEL_LP_CLK_SEL         (1U << 4)
+#define ICM45686_SMC_TMST_EN                  (1U << 0)
+#define ICM45686_SMC_CONTROL_0_VALUE \
+    (ICM45686_SMC_ACCEL_LP_CLK_SEL | ICM45686_SMC_TMST_EN)
 
-/* ----------------------------------------------------------------
- * Сброс и конфигурация устройства
- * ---------------------------------------------------------------- */
-/**
- * DEVICE_CONFIG (адрес 0x01, чтение/запись)
- * Бит [0] = SOFT_RESET_CONFIG:
- *   1 = программный сброс (само-очищается через ~1 мс).
- * После сброса все регистры возвращаются к значениям по умолчанию.
- * Необходимо подождать минимум 1 мс перед следующей операцией.
- */
-#define ICM45686_REG_DEVICE_CONFIG              0x01U
+/* ========================================================================== */
+/*                         Задержки                                           */
+/* ========================================================================== */
 
-/**
- * BANK_SEL (адрес 0x76, чтение/запись)
- * Выбор User Bank. ICM-45686 поддерживает только банк 0.
- * Значение 0x00 = банк 0 (единственный доступный через SPI).
- * Доступ к IPREG_TOP1/SYS1/SYS2 осуществляется только через IREG.
- */
-#define ICM45686_REG_BANK_SEL                   0x76U
-
-/* ----------------------------------------------------------------
- * Конфигурация измерительных каналов
- * ---------------------------------------------------------------- */
-/**
- * ACCEL_CONFIG0 (адрес 0x1B, чтение/запись)
- * Биты [7:5] — Full-Scale Range акселерометра (ACCEL_UI_FS_SEL).
- * Биты [3:0] — Output Data Rate акселерометра (ACCEL_ODR).
- */
-#define ICM45686_REG_ACCEL_CONFIG0              0x1BU
-
-/**
- * GYRO_CONFIG0 (адрес 0x1C, чтение/запись)
- * Биты [7:4] — Full-Scale Range гироскопа (GYRO_UI_FS_SEL).
- * Биты [3:0] — Output Data Rate гироскопа (GYRO_ODR).
- */
-#define ICM45686_REG_GYRO_CONFIG0               0x1CU
-
-/* ----------------------------------------------------------------
- * Конфигурация FIFO
- * ---------------------------------------------------------------- */
-/**
- * FIFO_CONFIG0 (адрес 0x1D, чтение/запись)
- * Биты [7:6] — режим FIFO (BYPASS / STREAM / STOP_ON_FULL).
- * Бит  [4]   — включить данные гироскопа в FIFO.
- * Бит  [3]   — включить данные акселерометра в FIFO.
- * Бит  [2]   — включить данные температуры в FIFO.
- * Бит  [1]   — включить временну́ю метку (timestamp) в FIFO.
- * Бит  [0]   — включить HIGH-RES (20-бит) режим.
- */
-#define ICM45686_REG_FIFO_CONFIG0               0x1DU
-
-/**
- * FIFO_CONFIG1_0 (адрес 0x28, чтение/запись) — LSB порога FIFO.
- * FIFO_CONFIG1_1 (адрес 0x29, чтение/запись) — MSB[3:0] порога FIFO.
- * Порог задаётся в байтах (watermark). Когда число байт в FIFO
- * достигает порога, генерируется прерывание INT_STATUS3.FIFO_THS.
- * Для 10 пакетов по 16 байт: порог = 160 байт.
- */
-#define ICM45686_REG_FIFO_CONFIG1_0             0x28U   /* LSB порога */
-#define ICM45686_REG_FIFO_CONFIG1_1             0x29U   /* MSB[3:0] порога */
-
-/**
- * FIFO_COUNT_0 (адрес 0x12, только чтение) — LSB количества байт в FIFO.
- * FIFO_COUNT_1 (адрес 0x13, только чтение) — MSB[3:0] количества байт.
- * Формат: little-endian. Максимум 2048 байт.
- */
-#define ICM45686_REG_FIFO_COUNT_0               0x12U   /* LSB */
-#define ICM45686_REG_FIFO_COUNT_1               0x13U   /* MSB */
-
-/**
- * FIFO_DATA (адрес 0x14, только чтение)
- * Порт чтения данных FIFO. При burst-read через DMA каждый
- * переданный байт автоматически извлекается из FIFO.
- * Первым байтом в пакете всегда идёт FIFO Header.
- */
-#define ICM45686_REG_FIFO_DATA                  0x14U
-
-/* ----------------------------------------------------------------
- * Прерывания
- * ---------------------------------------------------------------- */
-/**
- * INT_CONFIG0 (адрес 0x06) — управление полярностью и режимом INT1/INT2.
- * INT_CONFIG1 (адрес 0x07) — дополнительная конфигурация прерываний.
- */
-#define ICM45686_REG_INT_CONFIG0                0x06U
-#define ICM45686_REG_INT_CONFIG1                0x07U
-
-/**
- * INT_SOURCE0 (адрес 0x65) — маска источников прерывания для INT1.
- * INT_SOURCE1 (адрес 0x66) — маска источников прерывания для INT2.
- * Бит FIFO_THS_INT1_EN/FIFO_THS_INT2_EN — прерывание по порогу FIFO.
- * В нашей архитектуре прерывания не используются (polling через TIM6),
- * эти регистры оставлены для будущего расширения.
- */
-#define ICM45686_REG_INT_SOURCE0                0x65U
-#define ICM45686_REG_INT_SOURCE1                0x66U
-
-/**
- * INT_STATUS  (адрес 0x19) — общий статус прерываний.
- * INT_STATUS2 (адрес 0x1A) — статус дополнительных событий.
- * INT_STATUS3 (адрес 0x1B) — FIFO_FULL и FIFO_THS (порог FIFO).
- *   Бит [2] = FIFO_THS_INT: 1 если число байт в FIFO >= порога.
- *   Бит [1] = FIFO_FULL_INT: 1 если FIFO переполнен.
- */
-#define ICM45686_REG_INT_STATUS                 0x19U
-#define ICM45686_REG_INT_STATUS2                0x1AU
-#define ICM45686_REG_INT_STATUS3                0x1BU
-
-/* ================================================================
- * IREG — косвенный доступ к внутренним регистрам
- *
- * Используется для настройки CLKIN, RTC_MODE и других параметров
- * блоков IPREG_TOP1, IPREG_SYS1, IPREG_SYS2.
- *
- * Процедура записи через IREG (пример для ICM_WriteIReg()):
- *   ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
- *   ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
- *   ICM_WriteReg(sensor, ICM45686_REG_IREG_DATA,       value);
- *   Delay_ms(ICM45686_IREG_DELAY_MS);  // обязательная пауза >= 10 мкс
- *
- * Процедура чтения через IREG:
- *   ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
- *   ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
- *   val = ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
- *   Delay_ms(ICM45686_IREG_DELAY_MS);
- * ================================================================ */
-
-/**
- * IREG_ADDR_15_8 (User Bank 0, адрес 0x7C, чтение/запись)
- * Старший байт 16-битного адреса целевого IREG-регистра.
- * Пример: для IPREG_TOP1 @ 0xA430 → записать 0xA4.
- */
-#define ICM45686_REG_IREG_ADDR_15_8             0x7CU
-
-/**
- * IREG_ADDR_7_0 (User Bank 0, адрес 0x7D, чтение/запись)
- * Младший байт 16-битного адреса целевого IREG-регистра.
- * Пример: для IPREG_TOP1 @ 0xA430 → записать 0x30.
- */
-#define ICM45686_REG_IREG_ADDR_7_0              0x7DU
-
-/**
- * IREG_DATA (User Bank 0, адрес 0x7E, чтение/запись)
- * Порт данных для косвенного доступа к IREG.
- * Запись/чтение инициирует аппаратную транзакцию к целевому регистру.
- * После операции необходима задержка >= 10 мкс.
- */
-#define ICM45686_REG_IREG_DATA                  0x7EU
-
-/* ================================================================
- * IPREG_TOP1 — внутренние регистры тактирования и PAD-сценариев
- * База блока: 0xA400. Доступ только через IREG.
- *
- * Эти регистры управляют режимом CLKIN (внешнего тактирования).
- * ================================================================ */
-
-/**
- * IOC_PAD_SCENARIO_OVRD — адрес 0xA430 в IPREG_TOP1.
- *
- * Управляет назначением пина INT2/CLKIN.
- * По умолчанию пин INT2 работает как выход прерывания.
- * Для использования как CLKIN необходимо установить override.
- *
- * Битовое поле:
- *   Бит [2] = CLKIN_EN_OVRD_VAL:
- *     0 = CLKIN выключен (пин INT2 = обычный INT)
- *     1 = CLKIN включён  (пин INT2 = вход внешнего тактирования)
- *   Бит [1] = CLKIN_EN_OVRD:
- *     0 = используется значение из PAD_SCENARIO (по умолчанию)
- *     1 = override активен, бит [2] имеет эффект
- *
- * Для активации CLKIN записать: 0x06 (биты [2] и [1] = 1).
- */
-#define ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_H  0xA4U   /* старший байт адреса */
-#define ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L  0x30U   /* младший байт адреса */
-#define ICM45686_CLKIN_ENABLE_VAL               0x06U   /* OVRD=1, CLKIN_EN=1 */
-#define ICM45686_CLKIN_DISABLE_VAL              0x00U   /* OVRD=0, CLKIN_EN=0 */
-
-/**
- * SMC_CONTROL_0 — адрес 0xA458 в IPREG_TOP1.
- *
- * Управляет режимом синхронизации ODR и временно́й меткой.
- *
- * Битовое поле:
- *   Бит [6] = RTC_MODE:
- *     0 = ODR тактируется от внутреннего RC-генератора (~32 кГц)
- *     1 = ODR тактируется от внешнего сигнала CLKIN (RTC_MODE).
- *         Все 18 датчиков, тактируемых одним генератором, будут
- *         иметь идентичный опорный период — необходимо для
- *         coherent beamforming и межсенсорной синхронизации.
- *   Бит [1] = TMST_EN:
- *     0 = временна́я метка в пакете FIFO отсутствует
- *     1 = временна́я метка включена (2 байта в каждом FIFO-пакете)
- *
- * Для активации RTC + timestamp записать: 0x42 (биты [6] и [1] = 1).
- *
- * ПОРЯДОК: запись в SMC_CONTROL_0 должна быть выполнена
- * ПОСЛЕ IOC_PAD_SCENARIO_OVRD и ДО PWR_MGMT0.
- */
-#define ICM45686_IREG_SMC_CONTROL_0_H           0xA4U   /* старший байт адреса */
-#define ICM45686_IREG_SMC_CONTROL_0_L           0x58U   /* младший байт адреса */
-#define ICM45686_RTC_MODE_TMST_ENABLE_VAL       0x42U   /* RTC_MODE=1, TMST_EN=1 */
-
-/* ================================================================
- * Битовые поля REG_PWR_MGMT0 (0x10)
- * ================================================================ */
-
-/**
- * GYRO_MODE [3:2] — режим работы гироскопа.
- * OFF     : гироскоп отключён (экономия энергии)
- * STANDBY : гироскоп в режиме ожидания (быстрый старт)
- * LP      : Low-Power mode (пониженная точность, низкое энергопотребление)
- * LN      : Low-Noise mode (полная точность, используется для навигации)
- */
-#define ICM45686_PWR_GYRO_MODE_OFF              (0x00U << 2)
-#define ICM45686_PWR_GYRO_MODE_STANDBY          (0x01U << 2)
-#define ICM45686_PWR_GYRO_MODE_LP               (0x02U << 2)
-#define ICM45686_PWR_GYRO_MODE_LN               (0x03U << 2)
-
-/**
- * ACCEL_MODE [1:0] — режим работы акселерометра.
- * OFF : акселерометр отключён
- * LP  : Low-Power mode
- * LN  : Low-Noise mode (используется для навигации)
- */
-#define ICM45686_PWR_ACCEL_MODE_OFF             0x00U
-#define ICM45686_PWR_ACCEL_MODE_LP              0x02U
-#define ICM45686_PWR_ACCEL_MODE_LN              0x03U
-
-/* ================================================================
- * Битовые поля ACCEL_CONFIG0 (0x1B)
- * ================================================================ */
-
-/**
- * ACCEL_UI_FS_SEL [7:5] — Full-Scale Range акселерометра.
- * Чем меньше диапазон, тем выше разрешение на единицу g.
- * Для БПЛА рекомендуется ±16g (максимальный диапазон).
- */
-#define ICM45686_ACCEL_FS_16G                   (0x00U << 4)  /* ±16 g */
-#define ICM45686_ACCEL_FS_8G                    (0x01U << 4)  /* ±8 g  */
-#define ICM45686_ACCEL_FS_4G                    (0x02U << 4)  /* ±4 g  */
-#define ICM45686_ACCEL_FS_2G                    (0x03U << 4)  /* ±2 g  */
-
-/**
- * ACCEL_ODR [3:0] — Output Data Rate акселерометра.
- * При включённом CLKIN (RTC_MODE) ODR является делителем от частоты CLKIN.
- * Для CLKIN = 32 768 Гц и ODR = 3200 Гц: коэффициент деления = ~10.24.
- * Датчик автоматически подстраивает внутренний делитель под CLKIN.
- */
-#define ICM45686_ACCEL_ODR_6400HZ               0x03U  /* 6400 Гц (задел под будущее) */
-#define ICM45686_ACCEL_ODR_3200HZ               0x04U  /* 3200 Гц (текущий режим)     */
-#define ICM45686_ACCEL_ODR_1600HZ               0x05U  /* 1600 Гц */
-#define ICM45686_ACCEL_ODR_800HZ                0x06U  /* 800 Гц  */
-#define ICM45686_ACCEL_ODR_400HZ                0x07U  /* 400 Гц  */
-#define ICM45686_ACCEL_ODR_200HZ                0x08U  /* 200 Гц  */
-#define ICM45686_ACCEL_ODR_100HZ                0x09U  /* 100 Гц  */
-#define ICM45686_ACCEL_ODR_50HZ                 0x0AU  /* 50 Гц   */
-
-/* ================================================================
- * Битовые поля GYRO_CONFIG0 (0x1C)
- * ================================================================ */
-
-/**
- * GYRO_UI_FS_SEL [7:4] — Full-Scale Range гироскопа.
- * Для БПЛА с быстрыми манёврами рекомендуется ±2000 °/с или ±4000 °/с.
- * ±4000 °/с обеспечивает наибольший динамический диапазон.
- */
-#define ICM45686_GYRO_FS_4000DPS                (0x00U << 4)  /* ±4000 °/с */
-#define ICM45686_GYRO_FS_2000DPS                (0x01U << 4)  /* ±2000 °/с */
-#define ICM45686_GYRO_FS_1000DPS                (0x02U << 4)  /* ±1000 °/с */
-#define ICM45686_GYRO_FS_500DPS                 (0x03U << 4)  /* ±500 °/с  */
-#define ICM45686_GYRO_FS_250DPS                 (0x04U << 4)  /* ±250 °/с  */
-#define ICM45686_GYRO_FS_125DPS                 (0x05U << 4)  /* ±125 °/с  */
-#define ICM45686_GYRO_FS_62_5DPS                (0x06U << 4)  /* ±62.5 °/с */
-#define ICM45686_GYRO_FS_31_25DPS               (0x07U << 4)  /* ±31.25 °/с */
-
-/**
- * GYRO_ODR [3:0] — Output Data Rate гироскопа.
- * Аналогично ACCEL_ODR: при RTC_MODE тактируется от CLKIN.
- * Рекомендуется устанавливать GYRO_ODR = ACCEL_ODR для
- * синхронности данных в FIFO-пакете.
- */
-#define ICM45686_GYRO_ODR_6400HZ                0x03U  /* 6400 Гц (задел под будущее) */
-#define ICM45686_GYRO_ODR_3200HZ                0x04U  /* 3200 Гц (текущий режим)     */
-#define ICM45686_GYRO_ODR_1600HZ                0x05U  /* 1600 Гц */
-#define ICM45686_GYRO_ODR_800HZ                 0x06U  /* 800 Гц  */
-#define ICM45686_GYRO_ODR_400HZ                 0x07U  /* 400 Гц  */
-#define ICM45686_GYRO_ODR_200HZ                 0x08U  /* 200 Гц  */
-#define ICM45686_GYRO_ODR_100HZ                 0x09U  /* 100 Гц  */
-#define ICM45686_GYRO_ODR_50HZ                  0x0AU  /* 50 Гц   */
-
-/* ================================================================
- * Битовые поля FIFO_CONFIG0 (0x1D)
- * ================================================================ */
-
-/**
- * FIFO_MODE [7:6] — режим работы FIFO.
- * BYPASS      : FIFO отключён, данные читаются напрямую из регистров.
- * STREAM      : FIFO работает по кольцевому принципу (новые данные
- *               перезаписывают старые при переполнении). Оптимален
- *               для непрерывного DMA-чтения.
- * STOP_ON_FULL: FIFO останавливает запись при заполнении.
- */
-#define ICM45686_FIFO_MODE_BYPASS               (0x00U << 6)  /* FIFO отключён */
-#define ICM45686_FIFO_MODE_STREAM               (0x01U << 6)  /* кольцевой буфер */
-#define ICM45686_FIFO_MODE_STOP_ON_FULL         (0x02U << 6)  /* стоп при заполнении */
-
-/**
- * Маски выборки каналов в FIFO_CONFIG0.
- * Каждый бит разрешает запись данных соответствующего канала в FIFO.
- * TMST (временна́я метка) обязательна при использовании CLKIN/RTC_MODE
- * для контроля межсенсорной синхронизации.
- */
-#define ICM45686_FIFO_SEL_GYRO                  (1U << 4)  /* данные гироскопа в FIFO */
-#define ICM45686_FIFO_SEL_ACCEL                 (1U << 3)  /* данные акселерометра в FIFO */
-#define ICM45686_FIFO_SEL_TEMP                  (1U << 2)  /* температура в FIFO */
-#define ICM45686_FIFO_SEL_TMST                  (1U << 1)  /* временна́я метка в FIFO */
-#define ICM45686_FIFO_SEL_HIRES                 (1U << 0)  /* HIGH-RES 20-бит режим */
-
-/* ================================================================
- * Структура FIFO-пакета (для парсинга в ICM_ParseAllFIFO)
- *
- * Стандартный 16-битный пакет (16 байт):
- *   [0]      Header    (1 байт)  — флаги типа данных
- *   [1..6]   Gyro XYZ (6 байт)  — Gx_H, Gx_L, Gy_H, Gy_L, Gz_H, Gz_L
- *   [7..12]  Accel XYZ(6 байт)  — Ax_H, Ax_L, Ay_H, Ay_L, Az_H, Az_L
- *   [13]     Temp      (1 байт)  — Temperature (8-бит, сдвинутое значение)
- *   [14..15] Timestamp (2 байта) — ODR timestamp counter (little-endian)
- *
- * HIGH-RES пакет (20 байт, если FIFO_SEL_HIRES=1):
- *   [0]      Header    (1 байт)
- *   [1..6]   Gyro XYZ (6 байт)
- *   [7..12]  Accel XYZ(6 байт)
- *   [13..15] HiRes ext (3 байта) — дополнительные 4 бита для каждой оси
- *   [16]     Temp      (1 байт)
- *   [17..18] Timestamp (2 байта)
- *   [19]     зарезервировано
- * ================================================================ */
-
-/**
- * Биты заголовка FIFO-пакета (Header byte [0]).
- * Позволяют определить тип и состав конкретного пакета.
- */
-#define ICM45686_FIFO_HEADER_ACCEL_BIT          (1U << 6)  /* пакет содержит данные акселерометра */
-#define ICM45686_FIFO_HEADER_GYRO_BIT           (1U << 5)  /* пакет содержит данные гироскопа */
-#define ICM45686_FIFO_HEADER_TWENTYBITS_BIT     (1U << 3)  /* HIGH-RES (20-бит) режим */
-#define ICM45686_FIFO_HEADER_TIMESTAMP_BIT      (1U << 2)  /* пакет содержит timestamp */
-#define ICM45686_FIFO_HEADER_FSYNC_BIT          (1U << 1)  /* FSYNC-событие зафиксировано */
-
-/**
- * Размеры FIFO-пакетов в байтах.
- * Используются для расчёта количества пакетов из FIFO_COUNT
- * и для размера DMA-буфера (ICM_FIFO_DMA_BUF_SIZE в icm45686_config.h).
- */
-#define ICM45686_FIFO_PACKET_SIZE_16BIT         16U   /* стандартный 16-бит пакет */
-#define ICM45686_FIFO_PACKET_SIZE_HIRES         20U   /* HIGH-RES 20-бит пакет */
-
-/* ================================================================
- * Прочие константы SPI и задержки
- * ================================================================ */
-
-/**
- * ICM45686_SPI_READ_BIT — бит R/W для SPI-транзакции.
- * По протоколу ICM-45686: бит [7] байта адреса = 1 для чтения, 0 для записи.
- * Используется в ICM_ReadReg() и при формировании команды FIFO burst read.
- */
-#define ICM45686_SPI_READ_BIT                   0x80U
-
-/**
- * ICM45686_RESET_DELAY_MS — задержка после программного сброса.
- * После установки DEVICE_CONFIG[0]=1 нужно ждать минимум 1 мс
- * до первой SPI-транзакции. Установлено 2 мс с запасом.
- */
-#define ICM45686_RESET_DELAY_MS                 2U
-
-/**
- * ICM45686_STARTUP_DELAY_MS — задержка после включения PWR_MGMT0.
- * Гироскоп в режиме LN требует времени прогрева для стабилизации.
- * TDK рекомендует минимум 200 мс. Установлено консервативное значение.
- * При переходе на 6400 Гц значение не изменяется.
- */
-#define ICM45686_STARTUP_DELAY_MS               200U
-
-/**
- * ICM45686_IREG_DELAY_MS — задержка после записи в IREG_DATA.
- * Аппаратная транзакция к IPREG занимает ~10 мкс.
- * Используется 1 мс как консервативное значение с большим запасом.
- * При оптимизации можно заменить на аппаратный таймер с задержкой 20 мкс.
- */
-#define ICM45686_IREG_DELAY_MS                  1U
-
-/**
- * ICM45686_FIFO_SIZE_BYTES — максимальная ёмкость FIFO датчика в байтах.
- * При ODR=3200 Гц и пакете 16 байт: 2048/16 = 128 пакетов максимум.
- * При ODR=6400 Гц буфер заполнится за 128/6400 ≈ 20 мс (критично!).
- * Polling каждые 10 пакетов при 6400 Гц: интервал = 10/6400 ≈ 1.56 мс.
- */
-#define ICM45686_FIFO_SIZE_BYTES                2048U
+#define ICM45686_RESET_DELAY_US               2000U
+#define ICM45686_IREG_DELAY_US                10U
+#define ICM45686_PLL_TIMEOUT_US               10000U
+#define ICM45686_STARTUP_DELAY_MS             200U
 
 #ifdef __cplusplus
 }
