@@ -302,7 +302,6 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
     LL_SPI_ClearFlag_EOT(spi);
 
     ICM_CS_Low(sensor);
-    ICM_DelayMs(1U);
 
     LL_SPI_Enable(spi);
     LL_SPI_StartMasterTransfer(spi);

@@ -223,13 +223,13 @@ void DMA2_Stream3_IRQHandler(void)
  * ========================================================================== */
 void SPI1_IRQHandler(void)
 {
-    /* EOT — TSIZE байт физически ушли по SCK. */
-    if (LL_SPI_IsEnabledIT_EOT(SPI1) != 0U)
+    /* Проверяем ОБА условия: прерывание разрешено И флаг выставлен */
+    if ((LL_SPI_IsEnabledIT_EOT(SPI1) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI1) != 0U))
     {
         ICM_SPI_Eot_SPI1();
     }
 
-    /* OVR — RX FIFO переполнен. Сброс, чтобы не крутить IRQ. */
     if (LL_SPI_IsActiveFlag_OVR(SPI1) != 0U)
     {
         LL_SPI_ClearFlag_OVR(SPI1);
@@ -238,7 +238,8 @@ void SPI1_IRQHandler(void)
 
 void SPI4_IRQHandler(void)
 {
-    if (LL_SPI_IsEnabledIT_EOT(SPI4) != 0U)
+    if ((LL_SPI_IsEnabledIT_EOT(SPI4) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI4) != 0U))
     {
         ICM_SPI_Eot_SPI4();
     }
@@ -251,7 +252,8 @@ void SPI4_IRQHandler(void)
 
 void SPI5_IRQHandler(void)
 {
-    if (LL_SPI_IsEnabledIT_EOT(SPI5) != 0U)
+    if ((LL_SPI_IsEnabledIT_EOT(SPI5) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI5) != 0U))
     {
         ICM_SPI_Eot_SPI5();
     }

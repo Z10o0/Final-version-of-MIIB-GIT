@@ -131,6 +131,70 @@ int main(void)
 
   LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5);
 
+
+
+
+
+
+  SPI_TypeDef    *spi     = SPI4;
+      GPIO_TypeDef   *cs_port = GPIOE;
+      uint32_t        cs_pin  = LL_GPIO_PIN_10;
+      uint8_t         dummy;
+      uint8_t         result;
+      uint8_t         addr    = 0x72;   /* WHO_AM_I адрес по даташиту ICM-45686 */
+
+      /* 1. SPI выключен, TSIZE=2 байта */
+      if (LL_SPI_IsEnabled(spi))
+      {
+          LL_SPI_Disable(spi);
+          while (LL_SPI_IsEnabled(spi)) {}
+      }
+
+      LL_SPI_SetTransferSize(spi, 2U);
+      LL_SPI_SetInternalSSLevel(spi, LL_SPI_SS_LEVEL_HIGH);
+      LL_SPI_ClearFlag_EOT(spi);
+
+      /* 2. Опускаем CS */
+      LL_GPIO_ResetOutputPin(cs_port, cs_pin);
+
+      /* 3. Включаем SPI и запускаем передачу */
+      LL_SPI_Enable(spi);
+      LL_SPI_StartMasterTransfer(spi);
+
+      /* 4. Передаём адрес регистра WHO_AM_I с установленным битом чтения */
+      while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+      LL_SPI_TransmitData8(spi, (addr & 0x7FU) | 0x80U);  /* 0xF2 */
+
+      /* 5. Передаём фиктивный байт для вычитки ответа датчика */
+      while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+      LL_SPI_TransmitData8(spi, 0xFFU);
+
+      /* 6. Ждём EOT (оба байта ушли) */
+      while (LL_SPI_IsActiveFlag_EOT(spi) == 0U) {}
+      LL_SPI_ClearFlag_EOT(spi);
+      LL_SPI_ClearFlag_TXTF(spi);
+
+      /* 7. Читаем два байта из RX FIFO */
+      while (LL_SPI_IsActiveFlag_RXP(spi) == 0U) {}
+      dummy = LL_SPI_ReceiveData8(spi);   /* мусор */
+
+      while (LL_SPI_IsActiveFlag_RXP(spi) == 0U) {}
+      result = LL_SPI_ReceiveData8(spi);  /* собственно WHO_AM_I */
+
+      /* 8. CS HIGH, SPI выключить */
+      LL_GPIO_SetOutputPin(cs_port, cs_pin);
+
+      LL_SPI_Disable(spi);
+      while (LL_SPI_IsEnabled(spi)) {}
+
+
+
+
+
+
+
+
+
   ICM_BusesInit();
   uint32_t imu_faults = ICM_InitAllSensors();
 
@@ -344,13 +408,14 @@ static void MX_SPI1_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_2EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
+  SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
+  LL_SPI_Disable(SPI1);
   LL_SPI_Init(SPI1, &SPI_InitStruct);
   LL_SPI_SetStandard(SPI1, LL_SPI_PROTOCOL_MOTOROLA);
   LL_SPI_SetFIFOThreshold(SPI1, LL_SPI_FIFO_TH_01DATA);
@@ -456,10 +521,10 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
+  SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -568,10 +633,10 @@ static void MX_SPI3_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
+  SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -668,13 +733,14 @@ static void MX_SPI4_Init(void)
 
   /* USER CODE END SPI4_Init 1 */
   /* SPI4 parameter configuration*/
+  LL_SPI_Disable(SPI4);
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_2EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
+  SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -774,13 +840,14 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_2EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
+  SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
+  LL_SPI_Disable(SPI4);
   LL_SPI_Init(SPI5, &SPI_InitStruct);
   LL_SPI_SetStandard(SPI5, LL_SPI_PROTOCOL_MOTOROLA);
   LL_SPI_SetFIFOThreshold(SPI5, LL_SPI_FIFO_TH_01DATA);
@@ -882,10 +949,10 @@ static void MX_SPI6_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
+  SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -1154,137 +1221,150 @@ static void MX_DMA_Init(void)
   */
 static void MX_GPIO_Init(void)
 {
-  LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
-  /* USER CODE BEGIN MX_GPIO_Init_1 */
+    LL_GPIO_InitTypeDef GPIO_InitStruct = {0};
 
-  /* USER CODE END MX_GPIO_Init_1 */
+    /* =========================================================
+     * Тактирование всех используемых портов GPIO
+     * ========================================================= */
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOA);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOB);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOC);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOD);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOE);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOF);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOG);
+    LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOH);
 
-  /* GPIO Ports Clock Enable */
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOE);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOF);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOH);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOC);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOA);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOB);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOG);
-  LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOD);
+    /* =========================================================
+     * Все CS-пины в HIGH ДО конфигурации режима —
+     * исключаем случайный LOW во время Init.
+     *
+     * SPI1 (датчики 1–6):
+     *   PB12=CS36  PB13=CS35  PE8=CS33  PE9=CS34  PF13=CS31  PF14=CS32
+     * SPI5 (датчики 7–12):
+     *   PE14=CS29  PE15=CS30  PE7=CS27  PG1=CS28  PB0=CS25  PB1=CS26
+     * SPI4 (датчики 13–18):
+     *   PE10=CS23  PE11=CS24  PF15=CS22  PG0=CS21  PC4=CS19  PC5=CS20
+     * ========================================================= */
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOC, CS19_Pin|CS20_Pin);
+    /* GPIOB: PB12(CS36) PB13(CS35) PB0(CS25) PB1(CS26) */
+    LL_GPIO_SetOutputPin(GPIOB,
+        LL_GPIO_PIN_12 |   /* CS36 — датчик 1, SPI1 */
+        LL_GPIO_PIN_13 |   /* CS35 — датчик 2, SPI1 */
+        LL_GPIO_PIN_0  |   /* CS25 — датчик 11, SPI5 */
+        LL_GPIO_PIN_1);    /* CS26 — датчик 12, SPI5 */
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOB, CS25_Pin|CS26_Pin|CS36_Pin|CS35_Pin);
+    /* GPIOC: PC4(CS19) PC5(CS20) */
+    LL_GPIO_SetOutputPin(GPIOC,
+        LL_GPIO_PIN_4 |    /* CS19 — датчик 17, SPI4 */
+        LL_GPIO_PIN_5);    /* CS20 — датчик 18, SPI4 */
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOF, CS31_Pin|CS32_Pin|CS22_Pin);
+    /* GPIOE: PE8(CS33) PE9(CS34) PE7(CS27) PE14(CS29) PE15(CS30)
+     *        PE10(CS23) PE11(CS24) */
+    LL_GPIO_SetOutputPin(GPIOE,
+        LL_GPIO_PIN_7  |   /* CS27 — датчик 9,  SPI5 */
+        LL_GPIO_PIN_8  |   /* CS33 — датчик 3,  SPI1 */
+        LL_GPIO_PIN_9  |   /* CS34 — датчик 4,  SPI1 */
+        LL_GPIO_PIN_10 |   /* CS23 — датчик 13, SPI4 */
+        LL_GPIO_PIN_11 |   /* CS24 — датчик 14, SPI4 */
+        LL_GPIO_PIN_14 |   /* CS29 — датчик 7,  SPI5 */
+        LL_GPIO_PIN_15);   /* CS30 — датчик 8,  SPI5 */
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOG, CS21_Pin|CS28_Pin);
+    /* GPIOF: PF13(CS31) PF14(CS32) PF15(CS22) */
+    LL_GPIO_SetOutputPin(GPIOF,
+        LL_GPIO_PIN_13 |   /* CS31 — датчик 5,  SPI1 */
+        LL_GPIO_PIN_14 |   /* CS32 — датчик 6,  SPI1 */
+        LL_GPIO_PIN_15);   /* CS22 — датчик 15, SPI4 */
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOE, CS27_Pin|CS33_Pin|CS34_Pin|CS23_Pin
-                          |CS24_Pin|CS29_Pin|CS30_Pin);
+    /* GPIOG: PG0(CS21) PG1(CS28) */
+    LL_GPIO_SetOutputPin(GPIOG,
+        LL_GPIO_PIN_0 |    /* CS21 — датчик 16, SPI4 */
+        LL_GPIO_PIN_1);    /* CS28 — датчик 10, SPI5 */
 
-  /**/
-  LL_GPIO_SetOutputPin(CS_IMU1_GPIO_Port, CS_IMU1_Pin);
+    /* =========================================================
+     * PE3 — аналоговый вход (оставляем как есть)
+     * ========================================================= */
+    GPIO_InitStruct.Pin        = LL_GPIO_PIN_3;
+    GPIO_InitStruct.Mode       = LL_GPIO_MODE_ANALOG;
+    GPIO_InitStruct.Pull       = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-  /**/
-  LL_GPIO_SetOutputPin(CS_IMU2_GPIO_Port, CS_IMU2_Pin);
+    /* =========================================================
+     * GPIOB: PB12 PB13 PB0 PB1 — CS SPI1/SPI5
+     *   Датчик 1  PB12 CS36 SPI1
+     *   Датчик 2  PB13 CS35 SPI1
+     *   Датчик 11 PB0  CS25 SPI5
+     *   Датчик 12 PB1  CS26 SPI5
+     * ========================================================= */
+    GPIO_InitStruct.Pin        = LL_GPIO_PIN_12 | LL_GPIO_PIN_13 |
+                                  LL_GPIO_PIN_0  | LL_GPIO_PIN_1;
+    GPIO_InitStruct.Mode       = LL_GPIO_MODE_OUTPUT;
+    GPIO_InitStruct.Speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    GPIO_InitStruct.Pull       = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOD, CS_IMU3_Pin|CS_IMU4_Pin);
+    /* =========================================================
+     * GPIOC: PC4 PC5 — CS SPI4
+     *   Датчик 17 PC4 CS19 SPI4
+     *   Датчик 18 PC5 CS20 SPI4
+     * ========================================================= */
+    GPIO_InitStruct.Pin        = LL_GPIO_PIN_4 | LL_GPIO_PIN_5;
+    GPIO_InitStruct.Mode       = LL_GPIO_MODE_OUTPUT;
+    GPIO_InitStruct.Speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    GPIO_InitStruct.Pull       = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
 
-  /**/
-  LL_GPIO_SetOutputPin(GPIOG, CS_IMU5_Pin|CS_IMU6_Pin);
+    /* =========================================================
+     * GPIOE: PE7 PE8 PE9 PE10 PE11 PE14 PE15 — CS SPI1/SPI5/SPI4
+     *   Датчик 3  PE8  CS33 SPI1
+     *   Датчик 4  PE9  CS34 SPI1
+     *   Датчик 7  PE14 CS29 SPI5
+     *   Датчик 8  PE15 CS30 SPI5
+     *   Датчик 9  PE7  CS27 SPI5
+     *   Датчик 13 PE10 CS23 SPI4
+     *   Датчик 14 PE11 CS24 SPI4
+     * ========================================================= */
+    GPIO_InitStruct.Pin        = LL_GPIO_PIN_7  | LL_GPIO_PIN_8  |
+                                  LL_GPIO_PIN_9  | LL_GPIO_PIN_10 |
+                                  LL_GPIO_PIN_11 | LL_GPIO_PIN_14 |
+                                  LL_GPIO_PIN_15;
+    GPIO_InitStruct.Mode       = LL_GPIO_MODE_OUTPUT;
+    GPIO_InitStruct.Speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    GPIO_InitStruct.Pull       = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(GPIOE, &GPIO_InitStruct);
 
-  /**/
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_3;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_ANALOG;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOE, &GPIO_InitStruct);
+    /* =========================================================
+     * GPIOF: PF13 PF14 PF15 — CS SPI1/SPI4
+     *   Датчик 5  PF13 CS31 SPI1
+     *   Датчик 6  PF14 CS32 SPI1
+     *   Датчик 15 PF15 CS22 SPI4
+     * ========================================================= */
+    GPIO_InitStruct.Pin        = LL_GPIO_PIN_13 | LL_GPIO_PIN_14 | LL_GPIO_PIN_15;
+    GPIO_InitStruct.Mode       = LL_GPIO_MODE_OUTPUT;
+    GPIO_InitStruct.Speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    GPIO_InitStruct.Pull       = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(GPIOF, &GPIO_InitStruct);
 
-  /**/
-  GPIO_InitStruct.Pin = CS19_Pin|CS20_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+    /* =========================================================
+     * GPIOG: PG0 PG1 PG5 — CS SPI4/SPI5 + управление генератором
+     *   Датчик 10 PG1 CS28  SPI5
+     *   Датчик 16 PG0 CS21  SPI4
+     *   PG5 — управление внешним кварцевым генератором
+     *          HIGH = генератор включён (рабочий режим)
+     *          LOW  = генератор выключен (тест на внутреннем RC)
+     * ========================================================= */
+    LL_GPIO_SetOutputPin(GPIOG, LL_GPIO_PIN_5); /* PG5 HIGH = генератор ON */
 
-  /**/
-  GPIO_InitStruct.Pin = CS25_Pin|CS26_Pin|CS36_Pin|CS35_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOB, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS31_Pin|CS32_Pin|CS22_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOF, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS21_Pin|CS28_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOG, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS27_Pin|CS33_Pin|CS34_Pin|CS23_Pin
-                          |CS24_Pin|CS29_Pin|CS30_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOE, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS_IMU1_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(CS_IMU1_GPIO_Port, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS_IMU2_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(CS_IMU2_GPIO_Port, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS_IMU3_Pin|CS_IMU4_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOD, &GPIO_InitStruct);
-
-  /**/
-  GPIO_InitStruct.Pin = CS_IMU5_Pin|CS_IMU6_Pin;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_VERY_HIGH;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOG, &GPIO_InitStruct);
-
-  /* USER CODE BEGIN MX_GPIO_Init_2 */
-  /* PG5 — управление внешним кварцевым генератором (LOW = OFF) */
-  GPIO_InitStruct.Pin = LL_GPIO_PIN_5;
-  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
-  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
-  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
-  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
-  LL_GPIO_Init(GPIOG, &GPIO_InitStruct);
-  /* USER CODE END MX_GPIO_Init_2 */
+    GPIO_InitStruct.Pin        = LL_GPIO_PIN_0 | LL_GPIO_PIN_1 | LL_GPIO_PIN_5;
+    GPIO_InitStruct.Mode       = LL_GPIO_MODE_OUTPUT;
+    GPIO_InitStruct.Speed      = LL_GPIO_SPEED_FREQ_VERY_HIGH;
+    GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+    GPIO_InitStruct.Pull       = LL_GPIO_PULL_NO;
+    LL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 }
 
 /* USER CODE BEGIN 4 */
