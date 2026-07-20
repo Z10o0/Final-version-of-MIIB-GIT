@@ -59,17 +59,24 @@ extern volatile uint32_t g_dma_error_mask;
 
 void ICM_BusesInit(void);
 uint32_t ICM_InitAllSensors(void);
-
 void ICM_StartBurstRead(void);
 void ICM_StartBurstRead_SPI1(void);
 
 void ICM_DMA_RxComplete_SPI1(void);
 void ICM_DMA_RxComplete_SPI5(void);
 void ICM_DMA_RxComplete_SPI4(void);
-
 void ICM_DMA_Error_SPI1(void);
 void ICM_DMA_Error_SPI5(void);
 void ICM_DMA_Error_SPI4(void);
+void ICM_SPI_Eot_SPI1(void);
+void ICM_SPI_Eot_SPI5(void);
+void ICM_SPI_Eot_SPI4(void);
+
+extern volatile uint8_t  g_fifo_batch_ready;
+extern volatile uint8_t  g_dma_cycle_active;
+extern volatile uint32_t g_sensor_fault_mask;
+extern volatile uint32_t g_dma_error_mask;
+extern uint8_t g_fifo_data[ICM_SPI_BUS_COUNT][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE];
 
 void ICM_WriteReg(ICM_Sensor_t *sensor, uint8_t reg, uint8_t value);
 uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg);
