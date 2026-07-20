@@ -84,14 +84,36 @@ volatile uint8_t  g_dma_cycle_active  = 0U; /* 1 → DMA-цикл выполня
 volatile uint32_t g_sensor_fault_mask = 0U; /* бит N → датчик N неисправен   */
 volatile uint32_t g_dma_error_mask    = 0U; /* бит 0/1/2 → ошибка SPI1/5/4  */
 
-/* ===========================================================================
- *  Описание шин
+/* ============================================================
+ * Таблица соединений (Распиновка подключения плат):
  *
- *  global sensor_id:
- *    SPI1  0..5   CS36/CS35/CS33/CS34/CS31/CS32  (PB12,PB13,PE8,PE9,PF13,PF14)
- *    SPI5  6..11  CS29/CS30/CS27/CS28/CS25/CS26  (PE14,PE15,PE7,PG1,PB0,PB1)
- *    SPI4  12..17 CS23/CS24/CS22/CS21/CS19/CS20  (PE10,PE11,PF15,PG0,PC4,PC5)
- * ========================================================================== */
+ * SPI1 (DMA1, Stream2/3):
+ *   SCK=PA5, MISO=PA6, MOSI=PA7
+ *   Датчик 1  → CS: PB12
+ *   Датчик 2  → CS: PB13
+ *   Датчик 3  → CS: PE8
+ *   Датчик 4  → CS: PE9
+ *   Датчик 5  → CS: PF13
+ *   Датчик 6  → CS: PF14
+ *
+ * SPI5 (DMA2, Stream2/3):
+ *   SCK=PF7, MISO=PF8, MOSI=PF9
+ *   Датчик 7  → CS: PE14
+ *   Датчик 8  → CS: PE15
+ *   Датчик 9  → CS: PE7
+ *   Датчик 10 → CS: PG1
+ *   Датчик 11 → CS: PB0
+ *   Датчик 12 → CS: PB1
+ *
+ * SPI4 (DMA2, Stream0/1):
+ *   SCK=PE2, MISO=PE5, MOSI=PE6
+ *   Датчик 13 → CS: PE10
+ *   Датчик 14 → CS: PE11
+ *   Датчик 15 → CS: PF15
+ *   Датчик 16 → CS: PG0
+ *   Датчик 17 → CS: PC4
+ *   Датчик 18 → CS: PC5
+ * ============================================================ */
 
 ICM_Bus_t g_bus_spi1 =
 {
@@ -102,12 +124,18 @@ ICM_Bus_t g_bus_spi1 =
     .tx_buf        = g_tx_spi1,
     .sensors =
     {
-        { SPI1, CS36_GPIO_Port, CS36_Pin,  0U, 0U }, /* PB12 */
-        { SPI1, CS35_GPIO_Port, CS35_Pin,  1U, 0U }, /* PB13 */
-        { SPI1, CS33_GPIO_Port, CS33_Pin,  2U, 0U }, /* PE8  */
-        { SPI1, CS34_GPIO_Port, CS34_Pin,  3U, 0U }, /* PE9  */
-        { SPI1, CS31_GPIO_Port, CS31_Pin,  4U, 0U }, /* PF13 */
-        { SPI1, CS32_GPIO_Port, CS32_Pin,  5U, 0U }  /* PF14 */
+        /* idx=0  Датчик 1  PB12 */
+        { SPI1, GPIOB, LL_GPIO_PIN_12, 0U, 0U },
+        /* idx=1  Датчик 2  PB13 */
+        { SPI1, GPIOB, LL_GPIO_PIN_13, 1U, 0U },
+        /* idx=2  Датчик 3  PE8  */
+        { SPI1, GPIOE, LL_GPIO_PIN_8,  2U, 0U },
+        /* idx=3  Датчик 4  PE9  */
+        { SPI1, GPIOE, LL_GPIO_PIN_9,  3U, 0U },
+        /* idx=4  Датчик 5  PF13 */
+        { SPI1, GPIOF, LL_GPIO_PIN_13, 4U, 0U },
+        /* idx=5  Датчик 6  PF14 */
+        { SPI1, GPIOF, LL_GPIO_PIN_14, 5U, 0U }
     }
 };
 
@@ -120,12 +148,18 @@ ICM_Bus_t g_bus_spi5 =
     .tx_buf        = g_tx_spi5,
     .sensors =
     {
-        { SPI5, CS29_GPIO_Port, CS29_Pin,  6U, 0U }, /* PE14 */
-        { SPI5, CS30_GPIO_Port, CS30_Pin,  7U, 0U }, /* PE15 */
-        { SPI5, CS27_GPIO_Port, CS27_Pin,  8U, 0U }, /* PE7  */
-        { SPI5, CS28_GPIO_Port, CS28_Pin,  9U, 0U }, /* PG1  */
-        { SPI5, CS25_GPIO_Port, CS25_Pin, 10U, 0U }, /* PB0  */
-        { SPI5, CS26_GPIO_Port, CS26_Pin, 11U, 0U }  /* PB1  */
+        /* idx=0  Датчик 7  PE14 */
+        { SPI5, GPIOE, LL_GPIO_PIN_14, 6U, 0U },
+        /* idx=1  Датчик 8  PE15 */
+        { SPI5, GPIOE, LL_GPIO_PIN_15, 7U, 0U },
+        /* idx=2  Датчик 9  PE7  */
+        { SPI5, GPIOE, LL_GPIO_PIN_7,  8U, 0U },
+        /* idx=3  Датчик 10 PG1  */
+        { SPI5, GPIOG, LL_GPIO_PIN_1,  9U, 0U },
+        /* idx=4  Датчик 11 PB0  */
+        { SPI5, GPIOB, LL_GPIO_PIN_0,  10U, 0U },
+        /* idx=5  Датчик 12 PB1  */
+        { SPI5, GPIOB, LL_GPIO_PIN_1,  11U, 0U }
     }
 };
 
@@ -138,12 +172,18 @@ ICM_Bus_t g_bus_spi4 =
     .tx_buf        = g_tx_spi4,
     .sensors =
     {
-        { SPI4, CS23_GPIO_Port, CS23_Pin, 12U, 0U }, /* PE10 */
-        { SPI4, CS24_GPIO_Port, CS24_Pin, 13U, 0U }, /* PE11 */
-        { SPI4, CS22_GPIO_Port, CS22_Pin, 14U, 0U }, /* PF15 */
-        { SPI4, CS21_GPIO_Port, CS21_Pin, 15U, 0U }, /* PG0  */
-        { SPI4, CS19_GPIO_Port, CS19_Pin, 16U, 0U }, /* PC4  */
-        { SPI4, CS20_GPIO_Port, CS20_Pin, 17U, 0U }  /* PC5  */
+        /* idx=0  Датчик 13 PE10 */
+        { SPI4, GPIOE, LL_GPIO_PIN_10, 12U, 0U },
+        /* idx=1  Датчик 14 PE11 */
+        { SPI4, GPIOE, LL_GPIO_PIN_11, 13U, 0U },
+        /* idx=2  Датчик 15 PF15 */
+        { SPI4, GPIOF, LL_GPIO_PIN_15, 14U, 0U },
+        /* idx=3  Датчик 16 PG0  */
+        { SPI4, GPIOG, LL_GPIO_PIN_0,  15U, 0U },
+        /* idx=4  Датчик 17 PC4  */
+        { SPI4, GPIOC, LL_GPIO_PIN_4,  16U, 0U },
+        /* idx=5  Датчик 18 PC5  */
+        { SPI4, GPIOC, LL_GPIO_PIN_5,  17U, 0U }
     }
 };
 
@@ -262,6 +302,7 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
     LL_SPI_ClearFlag_EOT(spi);
 
     ICM_CS_Low(sensor);
+    ICM_DelayMs(1U);
 
     LL_SPI_Enable(spi);
     LL_SPI_StartMasterTransfer(spi);
@@ -301,18 +342,20 @@ void ICM_WriteIReg(ICM_Sensor_t *sensor,
                    uint8_t       addr_l,
                    uint8_t       value)
 {
-    /* Шаг 1: выбор блока IREG. */
-    ICM_WriteReg(sensor, ICM45686_REG_BLK_SEL_W, addr_h);
+    /* Шаг 1: старший байт адреса IREG. */
+    ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
 
-    /* Шаг 2: offset внутри блока. */
-    ICM_WriteReg(sensor, ICM45686_REG_MADDR_W, addr_l);
+    /* Шаг 2: младший байт адреса IREG. */
+    ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0, addr_l);
 
-    /* Шаг 3: запись данных. После M_W датчик обновляет IREG за ~4–10 мкс. */
-    ICM_WriteReg(sensor, ICM45686_REG_M_W, value);
+    /* Шаг 3: задержка — датчик должен подготовить IREG к записи. */
     ICM_DelayUs(ICM45686_IREG_DELAY_US);
 
-    /* Возврат в MREG1, иначе последующие WriteReg попадут в неверный банк. */
-    ICM_WriteReg(sensor, ICM45686_REG_BLK_SEL_W, 0x00U);
+    /* Шаг 4: запись данных в IREG_DATA. */
+    ICM_WriteReg(sensor, ICM45686_REG_IREG_DATA, value);
+
+    /* Шаг 5: задержка после записи (IREG требует ~4–10 мкс). */
+    ICM_DelayUs(ICM45686_IREG_DELAY_US);
 }
 
 /* ===========================================================================
@@ -413,10 +456,10 @@ uint32_t ICM_InitAllSensors(void)
              *   bit[2:1] = PAD_SCENARIO_OVRD = 0x03 → CLKIN mode
              *   bit[0]   = PAD_SCENARIO_OVRD_EN = 1  → override активен
              * ============================================================== */
-            ICM_WriteIReg(sensor,
-                          ICM45686_IREG_TOP1_ADDR_H,
-                          ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L,
-                          ICM45686_CLKIN_ENABLE_VAL);
+            //ICM_WriteIReg(sensor,
+            //              ICM45686_IREG_TOP1_ADDR_H,
+            //              ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L,
+            //              ICM45686_CLKIN_ENABLE_VAL);
 
             /* ==============================================================
              * Шаг 5. REG_MISC1: переключение на внешний клок.
@@ -426,11 +469,11 @@ uint32_t ICM_InitAllSensors(void)
              * INT1_CONFIG1 НЕ трогаем: INT1_STATUS1 читается независимо
              * от маски прерываний.
              * ============================================================== */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_REG_MISC1,
-                         ICM45686_OSC_ID_OVRD_EXT_CLK);
+            //ICM_WriteReg(sensor,
+            //             ICM45686_REG_INT1_CONFIG1,
+            //             ICM45686_INT1_PLL_RDY_EN);   /* было: ICM45686_INT1_PLLRDY_EN */
 
-            /* ==============================================================
+             /* ==============================================================
              * Шаг 6. Polling PLL_RDY в INT1_STATUS1[0].
              *
              * Типовое время захвата PLL = 3–5 мс при 32.768 кГц CLKIN.
@@ -438,34 +481,34 @@ uint32_t ICM_InitAllSensors(void)
              * INT1_STATUS1 — регистр read-clear, читать не чаще 1 раза
              * за итерацию.
              * ============================================================== */
-            timeout = ICM45686_PLL_TIMEOUT_US / 1000U;  /* итерации по 1 мс */
-            status  = 0U;
+            //timeout = ICM45686_PLL_TIMEOUT_US / 1000U;  /* итерации по 1 мс */
+            //status  = 0U;
 
-            do
-            {
+            //do
+            //{
                 /* Задержка ПЕРЕД чтением: при первой итерации PLL
                  * физически не может быть готов (< 1 мс после OSC_ID). */
-                ICM_DelayMs(1U);
-                status = ICM_ReadReg(sensor, ICM45686_REG_INT1_STATUS1);
+            //    ICM_DelayMs(1U);
+            //    status = ICM_ReadReg(sensor, ICM45686_REG_INT1_STATUS1);
 
-                if ((status & ICM45686_INT1_STATUS_PLL_RDY) != 0U)
-                {
-                    break;
-                }
+            //    if ((status & ICM45686_INT1_STATUS_PLL_RDY) != 0U)
+            //    {
+            //       break;
+            //   }
 
-                if (timeout > 0U)
-                {
-                    timeout--;
-                }
-            }
-            while (timeout != 0U);
+            //    if (timeout > 0U)
+           //    {
+            //        timeout--;
+            //    }
+            //}
+            //while (timeout != 0U);
 
-            if ((status & ICM45686_INT1_STATUS_PLL_RDY) == 0U)
-            {
+            //if ((status & ICM45686_INT1_STATUS_PLL_RDY) == 0U)
+            //{
                 /* PLL не захватил внешний клок за 10 мс. */
-                ICM_MarkFault(sensor);
-                continue;
-            }
+             //   ICM_MarkFault(sensor);
+             //   continue;
+            //}
 
             /* ==============================================================
              * Шаг 7. IREG: SMC_CONTROL_0 — настройка timestamp core.
@@ -482,9 +525,9 @@ uint32_t ICM_InitAllSensors(void)
              * Шаг 8. RTC_CONFIG: RTC_MODE_EN (bit5).
              * ODR генерируется от внешней 32.768 кГц clock domain.
              * ============================================================== */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_RTC_CONFIG,
-                         ICM45686_RTC_MODE_EN);
+            //ICM_WriteReg(sensor,
+            //             ICM45686_REG_RTC_CONFIG,
+            //             ICM45686_RTC_MODE_EN);
 
             /* ==============================================================
              * Шаг 9. FSR и ODR.
@@ -508,14 +551,14 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG0,
                          ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_2K);
 
-            /* 10б. Watermark: LOW байт первым, затем HIGH байт.
-             *      ICM_FIFO_WATERMARK_BYTES = 10 пакетов × 16 байт = 160. */
+            /* 10б. Watermark LOW байт. */
             ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG1_0,
+                         ICM45686_REG_FIFO_CONFIG10,           /* было: FIFO_CONFIG1_0 */
                          (uint8_t)(ICM_FIFO_WATERMARK_BYTES & 0x00FFU));
 
+            /* 10б. Watermark HIGH байт. */
             ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG1_1,
+                         ICM45686_REG_FIFO_CONFIG11,           /* было: FIFO_CONFIG1_1 */
                          (uint8_t)((ICM_FIFO_WATERMARK_BYTES >> 8U) & 0x00FFU));
 
             /* 10в. Timestamp в FIFO-пакете. Compression выкл → 16 байт/пакет. */

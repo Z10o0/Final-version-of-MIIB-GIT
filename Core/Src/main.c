@@ -124,11 +124,12 @@ int main(void)
   MX_USART1_UART_Init();
   MX_SPI5_Init();
 
-  LL_SPI_SetInternalSSLevel(SPI5, LL_SPI_SS_LEVEL_HIGH); /* SSI=1 */
-  LL_SPI_Enable(SPI5);
 
   MX_TIM7_Init();
   /* USER CODE BEGIN 2 */
+
+
+  LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5);
 
   ICM_BusesInit();
   uint32_t imu_faults = ICM_InitAllSensors();
@@ -343,8 +344,8 @@ static void MX_SPI1_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_2EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
   SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
@@ -670,8 +671,8 @@ static void MX_SPI4_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_2EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
   SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
@@ -773,8 +774,8 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.TransferDirection = LL_SPI_FULL_DUPLEX;
   SPI_InitStruct.Mode = LL_SPI_MODE_MASTER;
   SPI_InitStruct.DataWidth = LL_SPI_DATAWIDTH_8BIT;
-  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_LOW;   /* CPOL=0: SCK в покое LOW */
-  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_1EDGE;    /* CPHA=0: захват на 1-м фронте */
+  SPI_InitStruct.ClockPolarity = LL_SPI_POLARITY_HIGH;;   /* CPOL=0: SCK в покое LOW */
+  SPI_InitStruct.ClockPhase    = LL_SPI_PHASE_2EDGE;    /* CPHA=0: захват на 1-м фронте */
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
   SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV8;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
@@ -1276,7 +1277,13 @@ static void MX_GPIO_Init(void)
   LL_GPIO_Init(GPIOG, &GPIO_InitStruct);
 
   /* USER CODE BEGIN MX_GPIO_Init_2 */
-
+  /* PG5 — управление внешним кварцевым генератором (LOW = OFF) */
+  GPIO_InitStruct.Pin = LL_GPIO_PIN_5;
+  GPIO_InitStruct.Mode = LL_GPIO_MODE_OUTPUT;
+  GPIO_InitStruct.Speed = LL_GPIO_SPEED_FREQ_LOW;
+  GPIO_InitStruct.OutputType = LL_GPIO_OUTPUT_PUSHPULL;
+  GPIO_InitStruct.Pull = LL_GPIO_PULL_NO;
+  LL_GPIO_Init(GPIOG, &GPIO_InitStruct);
   /* USER CODE END MX_GPIO_Init_2 */
 }
 
