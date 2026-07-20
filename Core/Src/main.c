@@ -129,8 +129,9 @@ int main(void)
   /* USER CODE BEGIN 2 */
 
 
-  LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5);
+  LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
 
+  ICM_BusesInit();
 
 
 
@@ -195,7 +196,6 @@ int main(void)
 
 
 
-  ICM_BusesInit();
   uint32_t imu_faults = ICM_InitAllSensors();
 
   /* Инициализация UART-телеметрии (DMA TX) */
@@ -847,7 +847,7 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
-  LL_SPI_Disable(SPI4);
+  LL_SPI_Disable(SPI5);
   LL_SPI_Init(SPI5, &SPI_InitStruct);
   LL_SPI_SetStandard(SPI5, LL_SPI_PROTOCOL_MOTOROLA);
   LL_SPI_SetFIFOThreshold(SPI5, LL_SPI_FIFO_TH_01DATA);
