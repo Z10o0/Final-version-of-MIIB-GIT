@@ -54,15 +54,20 @@ static void MPU_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_DMA_Init(void);
 static void MX_BDMA_Init(void);
-static void MX_SPI1_Init(void);
-static void MX_SPI6_Init(void);
+static void MX_USART1_UART_Init(void);
+
 static void MX_TIM6_Init(void);
+static void MX_TIM7_Init(void);
+
+static void MX_SPI1_Init(void);
 static void MX_SPI2_Init(void);
 static void MX_SPI3_Init(void);
 static void MX_SPI4_Init(void);
-static void MX_USART1_UART_Init(void);
 static void MX_SPI5_Init(void);
-static void MX_TIM7_Init(void);
+static void MX_SPI6_Init(void);
+
+
+
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -113,88 +118,183 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
+  LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
+
   MX_DMA_Init();
   MX_BDMA_Init();
-  MX_SPI1_Init();
+
   MX_SPI6_Init();
-  MX_TIM6_Init();
-  MX_SPI2_Init();
   MX_SPI3_Init();
-  MX_SPI4_Init();
-  MX_USART1_UART_Init();
+  MX_SPI2_Init();
+
+  MX_SPI1_Init();
   MX_SPI5_Init();
+  MX_SPI4_Init();
 
-
+  MX_TIM6_Init();
   MX_TIM7_Init();
+
+  MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
 
-  LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
-
-  ICM_BusesInit();
 
 
 
 
 
-  SPI_TypeDef    *spi     = SPI4;
-      GPIO_TypeDef   *cs_port = GPIOE;
-      uint32_t        cs_pin  = LL_GPIO_PIN_10;
-      uint8_t         dummy;
-      uint8_t         result;
-      uint8_t         addr    = 0x72;   /* WHO_AM_I адрес по даташиту ICM-45686 */
 
-      /* 1. SPI выключен, TSIZE=2 байта */
-      if (LL_SPI_IsEnabled(spi))
-      {
+
+
+  /* ----------------------------------------------------------------
+   * Тест WHO_AM_I датчика 13 (SPI4, CS=PE10)
+   * Ожидаемый ответ: 0xE9
+   * ---------------------------------------------------------------- */
+  {
+      SPI_TypeDef  *spi     = SPI1;
+      GPIO_TypeDef *cs_port = GPIOF;
+      uint32_t      cs_pin  = LL_GPIO_PIN_13;
+      uint8_t       dummy;
+      uint8_t       result;
+      uint32_t      timeout;
+
+      /* Гарантированно выключаем SPI, сбрасываем все флаги */
+      if (LL_SPI_IsEnabled(spi)) {
           LL_SPI_Disable(spi);
-          while (LL_SPI_IsEnabled(spi)) {}
+          timeout = 100000U;
+          while (LL_SPI_IsEnabled(spi) && --timeout) {}
       }
 
+      /* Явный сброс флагов — OVR/MODF могут быть от предыдущих операций */
+      LL_SPI_ClearFlag_EOT(spi);
+      LL_SPI_ClearFlag_TXTF(spi);
+      WRITE_REG(spi->IFCR, 0x0FF8U);  /* Сброс всех clearable флагов сразу */
+
+      /* TSIZE=2, SSI=HIGH */
       LL_SPI_SetTransferSize(spi, 2U);
       LL_SPI_SetInternalSSLevel(spi, LL_SPI_SS_LEVEL_HIGH);
-      LL_SPI_ClearFlag_EOT(spi);
 
-      /* 2. Опускаем CS */
+      /* CS LOW */
       LL_GPIO_ResetOutputPin(cs_port, cs_pin);
 
-      /* 3. Включаем SPI и запускаем передачу */
+      /* SPE=1 + CSTART */
       LL_SPI_Enable(spi);
       LL_SPI_StartMasterTransfer(spi);
 
-      /* 4. Передаём адрес регистра WHO_AM_I с установленным битом чтения */
-      while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
-      LL_SPI_TransmitData8(spi, (addr & 0x7FU) | 0x80U);  /* 0xF2 */
+      /* Байт 1: адрес WHO_AM_I(0x72) + READ_BIT(0x80) = 0xF2 */
+      timeout = 100000U;
+      while ((LL_SPI_IsActiveFlag_TXP(spi) == 0U) && --timeout) {}
+      LL_SPI_TransmitData8(spi, 0xF2U);  /* 0x72 | 0x80 */
 
-      /* 5. Передаём фиктивный байт для вычитки ответа датчика */
-      while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+      /* Байт 2: dummy */
+      timeout = 100000U;
+      while ((LL_SPI_IsActiveFlag_TXP(spi) == 0U) && --timeout) {}
       LL_SPI_TransmitData8(spi, 0xFFU);
 
-      /* 6. Ждём EOT (оба байта ушли) */
-      while (LL_SPI_IsActiveFlag_EOT(spi) == 0U) {}
+      /* Ждём EOT — оба байта ушли по SCK */
+      timeout = 100000U;
+      while ((LL_SPI_IsActiveFlag_EOT(spi) == 0U) && --timeout) {}
       LL_SPI_ClearFlag_EOT(spi);
       LL_SPI_ClearFlag_TXTF(spi);
 
-      /* 7. Читаем два байта из RX FIFO */
-      while (LL_SPI_IsActiveFlag_RXP(spi) == 0U) {}
-      dummy = LL_SPI_ReceiveData8(spi);   /* мусор */
+      /* Читаем 2 байта из RX FIFO */
+      timeout = 100000U;
+      while ((LL_SPI_IsActiveFlag_RXP(spi) == 0U) && --timeout) {}
+      dummy = LL_SPI_ReceiveData8(spi);
+      (void)dummy;
 
-      while (LL_SPI_IsActiveFlag_RXP(spi) == 0U) {}
-      result = LL_SPI_ReceiveData8(spi);  /* собственно WHO_AM_I */
+      timeout = 100000U;
+      while ((LL_SPI_IsActiveFlag_RXP(spi) == 0U) && --timeout) {}
+      result = LL_SPI_ReceiveData8(spi);
 
-      /* 8. CS HIGH, SPI выключить */
+      /* CS HIGH */
       LL_GPIO_SetOutputPin(cs_port, cs_pin);
 
+      /* SPE=0 */
       LL_SPI_Disable(spi);
-      while (LL_SPI_IsEnabled(spi)) {}
+      timeout = 100000U;
+      while (LL_SPI_IsEnabled(spi) && --timeout) {}
+
+      /* result == 0xE9 → SPI4 работает */
+      /* result == 0x00 или 0xFF → нет связи с датчиком */
+      (void)result;  /* поставь здесь точку останова в отладчике */
+  }
+
+
+  {
+       SPI_TypeDef  *spi     = SPI1;
+       GPIO_TypeDef *cs_port = GPIOF;
+       uint32_t      cs_pin  = LL_GPIO_PIN_14;
+       uint8_t       dummy;
+       uint8_t       result;
+       uint32_t      timeout;
+
+       /* Гарантированно выключаем SPI, сбрасываем все флаги */
+       if (LL_SPI_IsEnabled(spi)) {
+           LL_SPI_Disable(spi);
+           timeout = 100000U;
+           while (LL_SPI_IsEnabled(spi) && --timeout) {}
+       }
+
+       /* Явный сброс флагов — OVR/MODF могут быть от предыдущих операций */
+       LL_SPI_ClearFlag_EOT(spi);
+       LL_SPI_ClearFlag_TXTF(spi);
+       WRITE_REG(spi->IFCR, 0x0FF8U);  /* Сброс всех clearable флагов сразу */
+
+       /* TSIZE=2, SSI=HIGH */
+       LL_SPI_SetTransferSize(spi, 2U);
+       LL_SPI_SetInternalSSLevel(spi, LL_SPI_SS_LEVEL_HIGH);
+
+       /* CS LOW */
+       LL_GPIO_ResetOutputPin(cs_port, cs_pin);
+
+       /* SPE=1 + CSTART */
+       LL_SPI_Enable(spi);
+       LL_SPI_StartMasterTransfer(spi);
+
+       /* Байт 1: адрес WHO_AM_I(0x72) + READ_BIT(0x80) = 0xF2 */
+       timeout = 100000U;
+       while ((LL_SPI_IsActiveFlag_TXP(spi) == 0U) && --timeout) {}
+       LL_SPI_TransmitData8(spi, 0xF2U);  /* 0x72 | 0x80 */
+
+       /* Байт 2: dummy */
+       timeout = 100000U;
+       while ((LL_SPI_IsActiveFlag_TXP(spi) == 0U) && --timeout) {}
+       LL_SPI_TransmitData8(spi, 0xFFU);
+
+       /* Ждём EOT — оба байта ушли по SCK */
+       timeout = 100000U;
+       while ((LL_SPI_IsActiveFlag_EOT(spi) == 0U) && --timeout) {}
+       LL_SPI_ClearFlag_EOT(spi);
+       LL_SPI_ClearFlag_TXTF(spi);
+
+       /* Читаем 2 байта из RX FIFO */
+       timeout = 100000U;
+       while ((LL_SPI_IsActiveFlag_RXP(spi) == 0U) && --timeout) {}
+       dummy = LL_SPI_ReceiveData8(spi);
+       (void)dummy;
+
+       timeout = 100000U;
+       while ((LL_SPI_IsActiveFlag_RXP(spi) == 0U) && --timeout) {}
+       result = LL_SPI_ReceiveData8(spi);
+
+       /* CS HIGH */
+       LL_GPIO_SetOutputPin(cs_port, cs_pin);
+
+       /* SPE=0 */
+       LL_SPI_Disable(spi);
+       timeout = 100000U;
+       while (LL_SPI_IsEnabled(spi) && --timeout) {}
+
+       /* result == 0xE9 → SPI4 работает */
+       /* result == 0x00 или 0xFF → нет связи с датчиком */
+       (void)result;  /* поставь здесь точку останова в отладчике */
+   }
 
 
 
 
-
-
-
-
+  ICM_BusesInit();
 
   uint32_t imu_faults = ICM_InitAllSensors();
 
