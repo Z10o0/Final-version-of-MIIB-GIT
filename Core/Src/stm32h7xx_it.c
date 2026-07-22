@@ -1,7 +1,35 @@
+/* =============================================================================
+ * stm32h7xx_it.c
+ *
+ * Обработчики прерываний для MIIB (18× ICM-45686, SPI1/5/4 + UART1).
+ *
+ * DMA-карта:
+ *   DMA1 Stream0  — USART1 RX  (не используется в текущей прошивке)
+ *   DMA1 Stream1  — USART1 TX  → UART_DMA_TxComplete
+ *   DMA1 Stream2  — SPI1  RX   → ICM_DMA_RxComplete_SPI1
+ *   DMA1 Stream3  — SPI1  TX   (только сброс флагов)
+ *   DMA2 Stream0  — SPI4  RX   → ICM_DMA_RxComplete_SPI4
+ *   DMA2 Stream1  — SPI4  TX   (только сброс флагов)
+ *   DMA2 Stream2  — SPI5  RX   → ICM_DMA_RxComplete_SPI5
+ *   DMA2 Stream3  — SPI5  TX   (только сброс флагов)
+ *
+ * SPI IRQ:
+ *   SPI1/4/5_IRQHandler — EOT → ICM_SPI_Eot_SPIx
+ *   (CS поднимается только после EOT, не после DMA TC)
+ *
+ * TIM6:
+ *   UPDATE → ICM_StartBurstRead()  (~3.125 мс = 320 Гц)
+ * =============================================================================
+ */
+
 #include "main.h"
 #include "stm32h7xx_it.h"
 #include "icm45686_spi.h"
 #include "uart_telemetry.h"
+
+/* ===========================================================================
+ *  Системные fault-handlers
+ * ========================================================================== */
 
 void NMI_Handler(void)
 {
@@ -44,7 +72,9 @@ void SysTick_Handler(void)
 {
 }
 
-/* UART1 TX DMA: DMA1 Stream1 */
+/* ===========================================================================
+ *  UART1 TX DMA: DMA1 Stream1
+ * ========================================================================== */
 void DMA1_Stream1_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE1(DMA1) != 0U)
@@ -59,7 +89,9 @@ void DMA1_Stream1_IRQHandler(void)
     }
 }
 
-/* SPI1 RX DMA: DMA1 Stream2 */
+/* ===========================================================================
+ *  SPI1 RX DMA: DMA1 Stream2
+ * ========================================================================== */
 void DMA1_Stream2_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE2(DMA1) != 0U)
@@ -76,7 +108,9 @@ void DMA1_Stream2_IRQHandler(void)
     }
 }
 
-/* SPI1 TX DMA: DMA1 Stream3, TC не используется */
+/* ===========================================================================
+ *  SPI1 TX DMA: DMA1 Stream3 — только сброс флагов (логика на RX TC)
+ * ========================================================================== */
 void DMA1_Stream3_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE3(DMA1) != 0U)
@@ -90,11 +124,12 @@ void DMA1_Stream3_IRQHandler(void)
     }
 }
 
-/*
- * TIM6 UPDATE.
- * CubeMX должен настроить частоту UPDATE = ICM_POLL_RATE_HZ = 320 Гц
- * для ODR=3200 Гц и ICM_FIFO_POLL_PACKETS=10.
- */
+/* ===========================================================================
+ *  TIM6 UPDATE — запуск DMA-цикла опроса
+ *
+ *  Период ≈ 3.125 мс (PSC=274, ARR=3124 @ APB1 timer 275 МГц)
+ *  → 320 Гц = ODR 3200 / 10 пакетов в FIFO.
+ * ========================================================================== */
 void TIM6_DAC_IRQHandler(void)
 {
     if (LL_TIM_IsActiveFlag_UPDATE(TIM6) != 0U)
@@ -104,7 +139,9 @@ void TIM6_DAC_IRQHandler(void)
     }
 }
 
-/* SPI4 RX DMA: DMA2 Stream0 */
+/* ===========================================================================
+ *  SPI4 RX DMA: DMA2 Stream0
+ * ========================================================================== */
 void DMA2_Stream0_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE0(DMA2) != 0U)
@@ -121,7 +158,9 @@ void DMA2_Stream0_IRQHandler(void)
     }
 }
 
-/* SPI4 TX DMA: DMA2 Stream1, TC не используется */
+/* ===========================================================================
+ *  SPI4 TX DMA: DMA2 Stream1 — только сброс флагов
+ * ========================================================================== */
 void DMA2_Stream1_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE1(DMA2) != 0U)
@@ -135,7 +174,9 @@ void DMA2_Stream1_IRQHandler(void)
     }
 }
 
-/* SPI5 RX DMA: DMA2 Stream2 */
+/* ===========================================================================
+ *  SPI5 RX DMA: DMA2 Stream2
+ * ========================================================================== */
 void DMA2_Stream2_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE2(DMA2) != 0U)
@@ -152,7 +193,9 @@ void DMA2_Stream2_IRQHandler(void)
     }
 }
 
-/* SPI5 TX DMA: DMA2 Stream3, TC не используется */
+/* ===========================================================================
+ *  SPI5 TX DMA: DMA2 Stream3 — только сброс флагов
+ * ========================================================================== */
 void DMA2_Stream3_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE3(DMA2) != 0U)
@@ -166,54 +209,73 @@ void DMA2_Stream3_IRQHandler(void)
     }
 }
 
+/* ===========================================================================
+ *  SPIx_IRQHandler — EOT (End Of Transfer)
+ *
+ *  Архитектура (см. icm45686_spi.c):
+ *    DMA RX TC  → ICM_NextSensor: выкл DMA, вкл EOT IRQ, CS остаётся LOW
+ *    SPI EOT    → ICM_SPI_Eot_SPIx → ICM_OnSpiEot: CS HIGH, SPE=0, next
+ *
+ *  Приоритет NVIC SPI IRQ должен быть НЕ ниже DMA IRQ
+ *  (чтобы EOT не «терялся» за длинным DMA handler).
+ *
+ *  OVR сбрасываем, чтобы не зациклить IRQ.
+ * ========================================================================== */
 void SPI1_IRQHandler(void)
 {
-}
+    /* Проверяем ОБА условия: прерывание разрешено И флаг выставлен */
+    if ((LL_SPI_IsEnabledIT_EOT(SPI1) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI1) != 0U))
+    {
+        ICM_SPI_Eot_SPI1();
+    }
 
-void SPI2_IRQHandler(void)
-{
-}
-
-void SPI3_IRQHandler(void)
-{
+    if (LL_SPI_IsActiveFlag_OVR(SPI1) != 0U)
+    {
+        LL_SPI_ClearFlag_OVR(SPI1);
+    }
 }
 
 void SPI4_IRQHandler(void)
 {
+    if ((LL_SPI_IsEnabledIT_EOT(SPI4) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI4) != 0U))
+    {
+        ICM_SPI_Eot_SPI4();
+    }
+
+    if (LL_SPI_IsActiveFlag_OVR(SPI4) != 0U)
+    {
+        LL_SPI_ClearFlag_OVR(SPI4);
+    }
 }
 
 void SPI5_IRQHandler(void)
 {
+    if ((LL_SPI_IsEnabledIT_EOT(SPI5) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI5) != 0U))
+    {
+        ICM_SPI_Eot_SPI5();
+    }
+
+    if (LL_SPI_IsActiveFlag_OVR(SPI5) != 0U)
+    {
+        LL_SPI_ClearFlag_OVR(SPI5);
+    }
 }
 
-void SPI6_IRQHandler(void)
-{
-}
+/* ===========================================================================
+ *  Неиспользуемые SPI / DMA / BDMA — заглушки (CubeMX vector table)
+ * ========================================================================== */
+void SPI2_IRQHandler(void) {}
+void SPI3_IRQHandler(void) {}
+void SPI6_IRQHandler(void) {}
 
-void DMA1_Stream0_IRQHandler(void)
-{
-}
+void DMA1_Stream0_IRQHandler(void) {}
+void DMA1_Stream4_IRQHandler(void) {}
+void DMA1_Stream5_IRQHandler(void) {}
+void DMA1_Stream6_IRQHandler(void) {}
+void DMA1_Stream7_IRQHandler(void) {}
 
-void DMA1_Stream4_IRQHandler(void)
-{
-}
-
-void DMA1_Stream5_IRQHandler(void)
-{
-}
-
-void DMA1_Stream6_IRQHandler(void)
-{
-}
-
-void DMA1_Stream7_IRQHandler(void)
-{
-}
-
-void BDMA_Channel0_IRQHandler(void)
-{
-}
-
-void BDMA_Channel1_IRQHandler(void)
-{
-}
+void BDMA_Channel0_IRQHandler(void) {}
+void BDMA_Channel1_IRQHandler(void) {}

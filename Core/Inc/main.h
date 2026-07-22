@@ -74,54 +74,7 @@ void Error_Handler(void);
 /* USER CODE END EFP */
 
 /* Private defines -----------------------------------------------------------*/
-#define CS19_Pin LL_GPIO_PIN_4
-#define CS19_GPIO_Port GPIOC
-#define CS20_Pin LL_GPIO_PIN_5
-#define CS20_GPIO_Port GPIOC
-#define CS25_Pin LL_GPIO_PIN_0
-#define CS25_GPIO_Port GPIOB
-#define CS26_Pin LL_GPIO_PIN_1
-#define CS26_GPIO_Port GPIOB
-#define CS31_Pin LL_GPIO_PIN_13
-#define CS31_GPIO_Port GPIOF
-#define CS32_Pin LL_GPIO_PIN_14
-#define CS32_GPIO_Port GPIOF
-#define CS22_Pin LL_GPIO_PIN_15
-#define CS22_GPIO_Port GPIOF
-#define CS21_Pin LL_GPIO_PIN_0
-#define CS21_GPIO_Port GPIOG
-#define CS28_Pin LL_GPIO_PIN_1
-#define CS28_GPIO_Port GPIOG
-#define CS27_Pin LL_GPIO_PIN_7
-#define CS27_GPIO_Port GPIOE
-#define CS33_Pin LL_GPIO_PIN_8
-#define CS33_GPIO_Port GPIOE
-#define CS34_Pin LL_GPIO_PIN_9
-#define CS34_GPIO_Port GPIOE
-#define CS23_Pin LL_GPIO_PIN_10
-#define CS23_GPIO_Port GPIOE
-#define CS24_Pin LL_GPIO_PIN_11
-#define CS24_GPIO_Port GPIOE
-#define CS29_Pin LL_GPIO_PIN_14
-#define CS29_GPIO_Port GPIOE
-#define CS30_Pin LL_GPIO_PIN_15
-#define CS30_GPIO_Port GPIOE
-#define CS36_Pin LL_GPIO_PIN_12
-#define CS36_GPIO_Port GPIOB
-#define CS35_Pin LL_GPIO_PIN_13
-#define CS35_GPIO_Port GPIOB
-#define CS_IMU1_Pin LL_GPIO_PIN_9
-#define CS_IMU1_GPIO_Port GPIOC
-#define CS_IMU2_Pin LL_GPIO_PIN_8
-#define CS_IMU2_GPIO_Port GPIOA
-#define CS_IMU3_Pin LL_GPIO_PIN_2
-#define CS_IMU3_GPIO_Port GPIOD
-#define CS_IMU4_Pin LL_GPIO_PIN_3
-#define CS_IMU4_GPIO_Port GPIOD
-#define CS_IMU5_Pin LL_GPIO_PIN_9
-#define CS_IMU5_GPIO_Port GPIOG
-#define CS_IMU6_Pin LL_GPIO_PIN_15
-#define CS_IMU6_GPIO_Port GPIOG
+
 #ifndef NVIC_PRIORITYGROUP_0
 #define NVIC_PRIORITYGROUP_0         ((uint32_t)0x00000007) /*!< 0 bit  for pre-emption priority,
                                                                  4 bits for subpriority */

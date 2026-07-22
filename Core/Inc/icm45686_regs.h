@@ -6,6 +6,8 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "inv_imu_regmap_le.h"
+#include "inv_imu_defs.h"
 
 /* ========================================================================== */
 /*                         USER BANK 0                                        */
