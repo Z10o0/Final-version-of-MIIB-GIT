@@ -184,7 +184,6 @@ extern "C" {
  * ========================================================================== */
 
 /* Старшие байты для IREG_ADDR_15_8 */
-#define ICM45686_IREG_IPREGBAR_ADDR_H       0xA0U   /* база IPREGBAR  = 0xA000 */
 #define ICM45686_IREG_IPREGTOP1_ADDR_H      0xA2U   /* база IPREGTOP1 = 0xA200 */
 #define ICM45686_IREG_IPREGSYS1_ADDR_H      0xA4U   /* база IPREGSYS1 = 0xA400 */
 #define ICM45686_IREG_IPREGSYS2_ADDR_H      0xA5U   /* база IPREGSYS2 = 0xA500 */
@@ -202,8 +201,9 @@ extern "C" {
  *
  *  Значение для CLKIN: bit2=1, bits[1:0]=10 → 0b110 = 0x06
  */
-#define ICM45686_IREG_IOC_PAD_OVRD_L        0x04U   /* IREG_ADDR_7_0 для IOC_PAD_SCENARIO_OVRD */
-#define ICM45686_CLKIN_OVRD_VALUE           0x06U   /* pads_int2_cfg_ovrd=1, val=10(CLKIN)      */
+#define ICM45686_REG_IOCPAD_SCENARIO        0x2FU   /* R  — read only статус         */
+#define ICM45686_REG_IOCPAD_SCENARIO_AUXOVRD 0x30U  /* RW — управление AUX1/CLKIN    */
+#define ICM45686_AUXOVRD_AUX1_DISABLE       0x04U   /* AUX1ENABLEOVRD=1, VAL=0       */
 
 /*
  * IOC_PAD_SCENARIO_AUX_OVRD (IPREGBAR, offset 0x05)  [Section 16.3, DS-000577]

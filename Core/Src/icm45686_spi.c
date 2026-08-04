@@ -404,32 +404,31 @@ uint32_t ICM_InitAllSensors(void)
                 continue;
             }
 
-            /* ШАГ 4: Активация CLKIN на пине 9
+            /* ШАГ 4: Освободить пин 9 (INT2/FSYNC/CLKIN) — отключить AUX1
              *
-             *   Регистр IOC_PAD_SCENARIO_OVRD находится в банке IPREGBAR.
-             *   По Section 16.3 (DS-000577):
-             *     IPREGBAR base = 0xA000, offset = 0x04
-             *     Полный IREG-адрес = 0xA004
-             *     → IREG_ADDR_15_8 = 0xA0, IREG_ADDR_7_0 = 0x04
+             *  IOCPADSCENARIOAUXOVRD (0x30), User Bank 0 — прямой регистр!
+             *  По Section 16.1, карта регистров DS-000577:
+             *    bit3 = AUX1MODEOVRD
+             *    bit2 = AUX1ENABLEOVRD    ← 1: включить override
+             *    bit1 = AUX1ENABLEOVRDVAL ← 0: AUX1 disable (освобождает пин 9 под CLKIN)
+             *    bit0 = AUX1ENABLEOVRDVAL (второй бит поля?)
              *
-             *   Значение 0x06 = 0b00000110:
-             *     bit2 = pads_int2_cfg_ovrd = 1  (enable override)
-             *     bit1 = pads_int2_cfg_ovrd_val[1] = 1 }
-             *     bit0 = pads_int2_cfg_ovrd_val[0] = 0 } → 10 = CLKIN mode
+             *  Значение 0x04: bit2=1 (ovrd enable), bit1=0 (AUX1 disabled)
+             *  Это освобождает пин 9 для работы как CLKIN.
+             *
+             *  ПРИМЕЧАНИЕ: IOCPADSCENARIO (0x2F) — read-only, его не трогаем.
              */
-            ICM_WriteIReg(sensor,
-                          ICM45686_IREG_IPREGBAR_ADDR_H,
-                          ICM45686_IREG_IOC_PAD_OVRD_L,
-                          ICM45686_CLKIN_OVRD_VALUE);
+            ICM_WriteReg(sensor,
+                         0x30U,   /* IOCPADSCENARIOAUXOVRD */
+                         0x04U);  /* AUX1ENABLEOVRD=1, AUX1ENABLEOVRDVAL=0 → AUX1 off */
 
             /* ШАГ 5: Переключить тактирование на внешний CLKIN
-             *   REG_MISC1 (0x39), bit0 = clk_src_sel = 1
-             *   По Section 17.51 (DS-000577)
+             *  REG_MISC1 (0x39), bit0 = clk_src_sel = 1
+             *  По Section 17.51 (DS-000577). Прямой регистр User Bank 0.
              */
             ICM_WriteReg(sensor,
                          ICM45686_REG_REG_MISC1,
-                         ICM45686_CLK_SRC_EXTERNAL);
-
+                         ICM45686_CLK_SRC_EXTERNAL);   /* 0x01 */
             /* ШАГ 6: Разрешить прерывание PLL_RDY
              *   INT1_CONFIG1 (0x17), bit0 = INT1_STATUS_EN_PLL_RDY = 1
              *   По Section 17.22 (DS-000577)
