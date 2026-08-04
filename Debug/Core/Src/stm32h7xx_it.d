@@ -25,9 +25,8 @@ Core/Src/stm32h7xx_it.o: ../Core/Src/stm32h7xx_it.c ../Core/Inc/main.h \
  ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h \
  ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_gpio.h \
  ../Core/Inc/stm32h7xx_it.h ../Core/Inc/icm45686_spi.h ../Core/Inc/main.h \
- ../Core/Inc/uart_telemetry.h ../Core/Inc/icm45686_data.h \
- ../Core/Inc/icm45686_config.h ../Core/Inc/icm45686_regs.h \
- ../Core/Inc/inv_imu_regmap_le.h ../Core/Inc/inv_imu_defs.h
+ ../Core/Inc/icm45686_regs.h ../Core/Inc/icm45686_config.h \
+ ../Core/Inc/uart_telemetry.h ../Core/Inc/icm45686_data.h
 ../Core/Inc/main.h:
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_bdma.h:
 ../Drivers/CMSIS/Device/ST/STM32H7xx/Include/stm32h7xx.h:
@@ -57,9 +56,7 @@ Core/Src/stm32h7xx_it.o: ../Core/Src/stm32h7xx_it.c ../Core/Inc/main.h \
 ../Core/Inc/stm32h7xx_it.h:
 ../Core/Inc/icm45686_spi.h:
 ../Core/Inc/main.h:
+../Core/Inc/icm45686_regs.h:
+../Core/Inc/icm45686_config.h:
 ../Core/Inc/uart_telemetry.h:
 ../Core/Inc/icm45686_data.h:
-../Core/Inc/icm45686_config.h:
-../Core/Inc/icm45686_regs.h:
-../Core/Inc/inv_imu_regmap_le.h:
-../Core/Inc/inv_imu_defs.h:

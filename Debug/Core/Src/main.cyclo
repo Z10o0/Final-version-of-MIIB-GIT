@@ -67,7 +67,10 @@
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_bus.h:2814:22:LL_APB4_GRP1_EnableClock	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_system.h:2333:22:LL_FLASH_SetLatency	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_system.h:2351:26:LL_FLASH_GetLatency	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_cortex.h:494:22:LL_MPU_Enable	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_cortex.h:509:22:LL_MPU_Disable	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_cortex.h:550:22:LL_MPU_EnableRegion	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_cortex.h:605:22:LL_MPU_ConfigRegion	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_pwr.h:1012:22:LL_PWR_ConfigSupply	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_pwr.h:1575:22:LL_PWR_SetRegulVoltageScaling	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_pwr.h:2108:26:LL_PWR_IsActiveFlag_VOS	2
@@ -104,4 +107,4 @@
 ../Core/Src/main.c:1120:13:MX_DMA_Init	1
 ../Core/Src/main.c:1173:13:MX_GPIO_Init	1
 ../Core/Src/main.c:1327:6:MPU_Config	1
-../Core/Src/main.c:1337:6:Error_Handler	1
+../Core/Src/main.c:1348:6:Error_Handler	1

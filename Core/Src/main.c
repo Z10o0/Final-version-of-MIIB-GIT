@@ -1328,8 +1328,19 @@ void MPU_Config(void)
 {
     LL_MPU_Disable();
 
+    /* D2 SRAM (0x30000000, 256KB) — Non-Cacheable для DMA-буферов */
+    LL_MPU_ConfigRegion(LL_MPU_REGION_NUMBER0,
+                        0x00U,                       /* subregion disable */
+                        0x30000000U,
+                        LL_MPU_REGION_SIZE_256KB     |
+                        LL_MPU_REGION_PRIV_RW        |
+                        LL_MPU_ACCESS_NOT_BUFFERABLE |
+                        LL_MPU_ACCESS_NOT_CACHEABLE  |
+                        LL_MPU_ACCESS_NOT_SHAREABLE  |
+                        LL_MPU_INSTRUCTION_ACCESS_DISABLE);
+    LL_MPU_EnableRegion(LL_MPU_REGION_NUMBER0);
+    LL_MPU_Enable(LL_MPU_CTRL_PRIVILEGED_DEFAULT);
 }
-
 /**
   * @brief  This function is executed in case of error occurrence.
   * @retval None
