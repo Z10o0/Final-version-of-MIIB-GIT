@@ -177,7 +177,7 @@ extern "C" {
  */
 #define ICM45686_IREG_TOP1_ADDR_H             0xA2U
 
-#define ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L 0x30U
+#define ICM45686_IREG_IOC_PAD_SCENARIO_OVRD_L  0x31U
 #define ICM45686_IREG_SMC_CONTROL_0_L         0x58U
 
 /* IOC_PAD_SCENARIO_OVRD: включить функцию CLKIN на pin 9 */

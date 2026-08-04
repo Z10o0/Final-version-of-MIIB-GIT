@@ -118,7 +118,7 @@ int main(void)
 
   /* Initialize all configured peripherals */
   MX_GPIO_Init();
-  LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
+  //LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
 
   MX_DMA_Init();
   MX_BDMA_Init();
@@ -137,10 +137,17 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
-
   ICM_BusesInit();
 
   uint32_t imu_faults = ICM_InitAllSensors();
+
+  /* Диагностика внешнего тактирования:
+   * g_clk_ok_mask   — датчики, захватившие CLKIN (все 18 бит = 0x3FFFF = 262143)
+   * g_clk_fail_mask — датчики, у которых внешний клок НЕ захватился
+   * Поставь breakpoint здесь или выведи через UART для анализа. */
+  volatile uint32_t clk_ok   = g_clk_ok_mask;    /* ожидаем 0x0003FFFF */
+  volatile uint32_t clk_fail = g_clk_fail_mask;  /* ожидаем 0x00000000 */
+
 
   /* Инициализация UART-телеметрии (DMA TX) */
   UART_Telemetry_Init();
@@ -355,7 +362,7 @@ static void MX_SPI1_Init(void)
   SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
   SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -684,7 +691,7 @@ static void MX_SPI4_Init(void)
   SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
   SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -787,7 +794,7 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
   SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV16;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;

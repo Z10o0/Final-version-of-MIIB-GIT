@@ -27,6 +27,7 @@ typedef struct
     ICM_Sensor_t sensors[ICM_SENSORS_PER_BUS];
     volatile uint8_t current_sensor_idx;
     volatile uint8_t transfer_complete;
+    volatile uint8_t eot_handled;   /* защита от двойного входа в ICM_OnSpiEot */
     uint8_t *tx_buf;   /* указатель на AXI-буфер, не вложенный массив */
 } ICM_Bus_t;
 
@@ -56,6 +57,11 @@ extern volatile uint8_t g_fifo_batch_ready;
 extern volatile uint8_t g_dma_cycle_active;
 extern volatile uint32_t g_sensor_fault_mask;
 extern volatile uint32_t g_dma_error_mask;
+/* Диагностика захвата внешнего тактирования:
+ * g_clk_ok_mask   — бит N = датчик N успешно захватил CLKIN (PLL_RDY)
+ * g_clk_fail_mask — бит N = датчик N НЕ захватил CLKIN за таймаут 10 мс  */
+extern volatile uint32_t g_clk_ok_mask;
+extern volatile uint32_t g_clk_fail_mask;
 
 void ICM_BusesInit(void);
 uint32_t ICM_InitAllSensors(void);
