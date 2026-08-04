@@ -1,31 +1,21 @@
 /* =============================================================================
  * icm45686_spi.c  — ПАРАЛЛЕЛЬНАЯ версия, все 3 шины SPI работают одновременно
  *
- * Все адреса регистров и битовые маски — строго по DS-000577 Rev 1.0.
+ * Алгоритм включения внешнего CLKIN — строго по TDK reference driver:
+ *   tdk-invn-oss/motion.mcu.icm45686.driver
+ *   inv_imu_driver_advanced.c → inv_imu_adv_enable_clkin_rtc()
  *
- * КЛЮЧЕВЫЕ ИСПРАВЛЕНИЯ ОТНОСИТЕЛЬНО ПРЕДЫДУЩЕЙ ВЕРСИИ:
+ * Последовательность CLKIN (4 шага TDK):
+ *  1. SIFS_I3C_STC_CFG (0x27): i3c_stc_mode = 0
+ *     "I3CSM STC has higher priority over CLKIN — must be disabled first"
+ *  2. IPREG_SYS2_REG_123 (IREG A5:7B): accel_src_ctrl = 0b10 (FIR+interp ON)
+ *  3. IPREG_SYS1_REG_166 (IREG A4:A6): gyro_src_ctrl  = 0b10 (FIR+interp ON)
+ *  4. RTC_CONFIG (0x26): rtc_mode = 1
  *
- *  1. ICM45686_MISC2_SOFT_RST = 0x02 (bit1), не 0x04.
- *     По Section 17, REG_MISC2 (0x7F): bit0=IREG_DONE, bit1=SOFT_RST.
- *
- *  2. ICM45686_CLK_SRC_EXTERNAL = 0x01 (bit0 REG_MISC1).
- *     По Section 17.51, REG_MISC1 (0x39): clk_src_sel = bit0.
- *
- *  3. IREG minimum wait time-gap (Section 14.3):
- *     Тайм-гэп — это время между CS HIGH после записи адреса и следующим
- *     CS LOW. Реализовано через ICM_DelayUs(ICM45686_IREG_WAIT_US) в
- *     ICM_WriteIReg и ICM_ReadIReg ПОСЛЕ каждой SPI транзакции с CS.
- *     ireg_done поллится дополнительно как подтверждение.
- *
- *  4. Адрес IOC_PAD_SCENARIO_OVRD: IPREGBAR банк (база 0xA000), offset 0x04.
- *     IREG_ADDR_15_8 = 0xA0, IREG_ADDR_7_0 = 0x04.
- *     Ранее ошибочно использовался адрес IPREGTOP1 (0xA2xx).
- *
- *  5. INT1_STATUS1 (0x1A) PLL_RDY — bit0, маска 0x01.
- *     INT1_CONFIG1  (0x17) PLL_RDY enable — bit0, маска 0x01.
- *
- *  6. ICM_WaitIRegDone() поллит REG_MISC2[bit0]=IREG_DONE.
- *     Используется строго по алгоритму Section 14.4 и 14.5.
+ * Пин INT2 как CLKIN:
+ *  - IOC_PAD_AUX_OVRD (0x30): aux2_enable_ovrd=1, aux2_enable_ovrd_val=0
+ *  - IOC_PAD_SCENARIO_OVRD (0x2F): pads_int2_cfg_ovrd=1, val=0b10 (CLKIN)
+ *  - REG_MISC1 (0x39): clk_src_sel = 1
  *
  * Шины и DMA:
  *   SPI1  RX→DMA1/Stream2   TX→DMA1/Stream3   датчики 0..5
@@ -261,21 +251,13 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
 
 /* ===========================================================================
  *  ICM_WaitIRegDone — поллинг REG_MISC2[bit0] = IREG_DONE
- *
- *  По Section 14.3 (DS-000577):
- *    После CS HIGH, внутри чипа запускается операция pre-fetch или apply.
- *    Бит IREG_DONE в REG_MISC2[0] выставляется в 1, когда операция завершена.
- *    Хост должен подождать минимальный тайм-гэп (≥4 мкс) И дождаться
- *    IREG_DONE=1, прежде чем обращаться к IREG_DATA.
- *
- *  Возвращает: 1 — готов, 0 — таймаут.
  * ========================================================================== */
 static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
 {
     uint32_t timeout = 500U;
     uint8_t  misc2;
 
-    ICM_DelayUs(ICM45686_IREG_WAIT_US);   /* Минимальный тайм-гэп (Section 14.3) */
+    ICM_DelayUs(ICM45686_IREG_WAIT_US);
 
     do
     {
@@ -293,14 +275,7 @@ static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
 }
 
 /* ===========================================================================
- *  ICM_WriteIReg — запись в Internal Register
- *
- *  Алгоритм по Section 14.4 (DS-000577):
- *   1. Записать IREG_ADDR_15_8
- *   2. Записать IREG_ADDR_7_0  (после CS HIGH: запускается внутренний pre-fetch)
- *   3. Подождать minimum wait time-gap + IREG_DONE=1
- *   4. Записать IREG_DATA       (после CS HIGH: данные применяются внутри)
- *   5. Подождать IREG_DONE=1    (подтверждение применения)
+ *  ICM_WriteIReg — запись в Internal Register (Section 14.4)
  * ========================================================================== */
 void ICM_WriteIReg(ICM_Sensor_t *sensor,
                    uint8_t       addr_h,
@@ -309,22 +284,14 @@ void ICM_WriteIReg(ICM_Sensor_t *sensor,
 {
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
-    /* После CS HIGH по IREG_ADDR_7_0 — ждём готовности (Section 14.3) */
     ICM_WaitIRegDone(sensor);
 
     ICM_WriteReg(sensor, ICM45686_REG_IREG_DATA, value);
-    /* После записи IREG_DATA — ждём подтверждения применения */
     ICM_WaitIRegDone(sensor);
 }
 
 /* ===========================================================================
- *  ICM_ReadIReg — чтение из Internal Register
- *
- *  Алгоритм по Section 14.5 (DS-000577):
- *   1. Записать IREG_ADDR_15_8
- *   2. Записать IREG_ADDR_7_0  (после CS HIGH: запускается pre-fetch)
- *   3. Подождать minimum wait time-gap + IREG_DONE=1
- *   4. Прочитать IREG_DATA
+ *  ICM_ReadIReg — чтение из Internal Register (Section 14.5)
  * ========================================================================== */
 uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
                      uint8_t       addr_h,
@@ -332,7 +299,6 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
 {
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
-    /* После CS HIGH по IREG_ADDR_7_0 — ждём готовности данных */
     ICM_WaitIRegDone(sensor);
 
     return ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
@@ -341,22 +307,28 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
 /* ===========================================================================
  *  ICM_InitAllSensors
  *
- *  Последовательность инициализации по DS-000577:
+ *  Последовательность инициализации:
  *
- *  ШАГ 1. Проверка WHO_AM_I = 0xE9
- *  ШАГ 2. Soft Reset через REG_MISC2[bit1] = 1, ждём 2 мс
- *  ШАГ 3. Снова WHO_AM_I после сброса
- *  ШАГ 4. Настройка пина 9 как CLKIN через IREG IOC_PAD_SCENARIO_OVRD
- *           IPREGBAR (base=0xA000), offset=0x04
- *           Значение: pads_int2_cfg_ovrd=1 (bit2), val=10(CLKIN) (bits[1:0]) → 0x06
- *  ШАГ 5. Переключить источник клока: REG_MISC1[bit0] = 1 (external CLKIN)
- *  ШАГ 6. Разрешить прерывание PLL_RDY: INT1_CONFIG1[bit0] = 1
- *  ШАГ 7. Поллинг INT1_STATUS1[bit0] (PLL_RDY) — ждём захвата PLL
- *  ШАГ 8. RTC_CONFIG: включить RTC_MODE если PLL захватил клок
- *  ШАГ 9. FSR и ODR
- *  ШАГ 10. Конфигурация FIFO
- *  ШАГ 11. PWR_MGMT0: включить Gyro LN + Accel LN
- *  ШАГ 12. Задержка старта 200 мс
+ *  ШАГ 1.  WHO_AM_I = 0xE9
+ *  ШАГ 2.  Soft Reset (REG_MISC2 bit1), задержка 2 мс
+ *  ШАГ 3.  WHO_AM_I после сброса
+ *
+ *  -- CLKIN (строго по TDK inv_imu_adv_enable_clkin_rtc) --
+ *  ШАГ 4.  IOC_PAD_AUX_OVRD (0x30): aux2_enable_ovrd=1, val=0 → AUX2 off
+ *  ШАГ 5.  IOC_PAD_SCENARIO_OVRD (0x2F): pads_int2_cfg_ovrd=1, val=0b10 (CLKIN)
+ *  ШАГ 6.  SIFS_I3C_STC_CFG (0x27): i3c_stc_mode = 0
+ *  ШАГ 7.  IPREG_SYS2_REG_123 (IREG A5:7B): accel_src_ctrl = 0b10
+ *  ШАГ 8.  IPREG_SYS1_REG_166 (IREG A4:A6): gyro_src_ctrl  = 0b10
+ *  ШАГ 9.  REG_MISC1 (0x39): clk_src_sel = 1 (внешний CLKIN)
+ *  ШАГ 10. RTC_CONFIG (0x26): rtc_mode = 1  (безусловно, как в TDK)
+ *  ШАГ 11. Задержка 1 мс — стабилизация PLL
+ *  ШАГ 12. Поллинг PLL_RDY (INT1_STATUS1 bit0), таймаут 20 мс
+ *  -- конец CLKIN --
+ *
+ *  ШАГ 13. FSR и ODR
+ *  ШАГ 14. Конфигурация FIFO
+ *  ШАГ 15. PWR_MGMT0: Gyro LN + Accel LN
+ *  ШАГ 16. Startup delay 200 мс
  * ========================================================================== */
 uint32_t ICM_InitAllSensors(void)
 {
@@ -370,6 +342,7 @@ uint32_t ICM_InitAllSensors(void)
     uint8_t  sensor_idx;
     uint8_t  status;
     uint32_t timeout;
+    uint8_t  reg_val;
 
     g_sensor_fault_mask = 0U;
     g_clk_ok_mask       = 0U;
@@ -390,10 +363,7 @@ uint32_t ICM_InitAllSensors(void)
                 continue;
             }
 
-            /* ШАГ 2: Soft Reset
-             *   REG_MISC2 (0x7F), bit1 = SOFT_RST = 1 → 0x02
-             *   По DS-000577 Section 17: SOFT_RST = bit1, не bit2!
-             */
+            /* ШАГ 2: Soft Reset (REG_MISC2 bit1 = 0x02) */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
             ICM_DelayUs(ICM45686_RESET_DELAY_US);
 
@@ -404,45 +374,64 @@ uint32_t ICM_InitAllSensors(void)
                 continue;
             }
 
-            /* ШАГ 4: Освободить пин 9 (INT2/FSYNC/CLKIN) — отключить AUX1
+            /* ================================================================
+             *  CLKIN — по TDK inv_imu_adv_enable_clkin_rtc() + set_int2_pin_usage()
              *
-             *  IOCPADSCENARIOAUXOVRD (0x30), User Bank 0 — прямой регистр!
-             *  По Section 16.1, карта регистров DS-000577:
-             *    bit3 = AUX1MODEOVRD
-             *    bit2 = AUX1ENABLEOVRD    ← 1: включить override
-             *    bit1 = AUX1ENABLEOVRDVAL ← 0: AUX1 disable (освобождает пин 9 под CLKIN)
-             *    bit0 = AUX1ENABLEOVRDVAL (второй бит поля?)
+             *  ИСПРАВЛЕНИЕ: IOC_PAD_SCENARIO_OVRD и IOC_PAD_AUX_OVRD — IREG регистры
+             *  в банке IPREG_TOP1 (0xA2), а НЕ прямые User Bank 0!
              *
-             *  Значение 0x04: bit2=1 (ovrd enable), bit1=0 (AUX1 disabled)
-             *  Это освобождает пин 9 для работы как CLKIN.
-             *
-             *  ПРИМЕЧАНИЕ: IOCPADSCENARIO (0x2F) — read-only, его не трогаем.
-             */
-            ICM_WriteReg(sensor,
-                         0x30U,   /* IOCPADSCENARIOAUXOVRD */
-                         0x04U);  /* AUX1ENABLEOVRD=1, AUX1ENABLEOVRDVAL=0 → AUX1 off */
+             *  inv_imu_regmap_le.h:
+             *    IOC_PAD_SCENARIO_OVRD → IPREG_TOP1 base=0xA200, offset=0x31
+             *    IOC_PAD_AUX_OVRD      → IPREG_TOP1 base=0xA200, offset=0x32
+             *    SIFS_I3C_STC_CFG      → IPREG_TOP1 base=0xA200, offset=0x52
+             * ================================================================ */
 
-            /* ШАГ 5: Переключить тактирование на внешний CLKIN
-             *  REG_MISC1 (0x39), bit0 = clk_src_sel = 1
-             *  По Section 17.51 (DS-000577). Прямой регистр User Bank 0.
+            /* ШАГ 4: AUX2 off — IREG 0xA2:0x32
+             *  bit2 aux2_enable_ovrd = 1
+             *  bit1 aux2_enable_ovrd_val = 0
              */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_REG_MISC1,
-                         ICM45686_CLK_SRC_EXTERNAL);   /* 0x01 */
-            /* ШАГ 6: Разрешить прерывание PLL_RDY
-             *   INT1_CONFIG1 (0x17), bit0 = INT1_STATUS_EN_PLL_RDY = 1
-             *   По Section 17.22 (DS-000577)
-             */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_INT1_CONFIG1,
-                         ICM45686_INT1_PLL_RDY_EN);
+            reg_val  = ICM_ReadIReg(sensor, 0xA2U, 0x32U);
+            reg_val |=  (1U << 2);   /* aux2_enable_ovrd = 1 */
+            reg_val &= ~(1U << 1);   /* aux2_enable_ovrd_val = 0 */
+            ICM_WriteIReg(sensor, 0xA2U, 0x32U, reg_val);
 
-            /* ШАГ 7: Поллинг PLL_RDY
-             *   INT1_STATUS1 (0x1A), bit0 = INT1_STATUS_PLL_RDY
-             *   Регистр RC (read-clear).
-             *   По Section 17.25 (DS-000577).
-             *   Таймаут 20 мс.
+            /* ШАГ 5: Пин INT2 → CLKIN — IREG 0xA2:0x31
+             *  bit2 pads_int2_cfg_ovrd = 1
+             *  bits[1:0] pads_int2_cfg_ovrd_val = 0b10 (CLKIN)
              */
+            reg_val  = ICM_ReadIReg(sensor, 0xA2U, 0x31U);
+            reg_val |=  (1U << 2);              /* ovrd_en = 1 */
+            reg_val  = (reg_val & ~0x03U) | 0x02U; /* val = 0b10 */
+            ICM_WriteIReg(sensor, 0xA2U, 0x31U, reg_val);
+
+            /* ШАГ 6: I3C STC Mode off — IREG 0xA2:0x52
+             *  bit0 i3c_stc_mode = 0
+             */
+            reg_val  = ICM_ReadIReg(sensor, 0xA2U, 0x52U);
+            reg_val &= ~(1U << 0);
+            ICM_WriteIReg(sensor, 0xA2U, 0x52U, reg_val);
+
+            /* ШАГ 7: accel_src_ctrl = 0b10 — IREG 0xA5:0x7B */
+            reg_val  = ICM_ReadIReg(sensor, 0xA5U, 0x7BU);
+            reg_val  = (reg_val & ~0x03U) | 0x02U;
+            ICM_WriteIReg(sensor, 0xA5U, 0x7BU, reg_val);
+
+            /* ШАГ 8: gyro_src_ctrl = 0b10 — IREG 0xA4:0xA6 */
+            reg_val  = ICM_ReadIReg(sensor, 0xA4U, 0xA6U);
+            reg_val  = (reg_val & ~0x03U) | 0x02U;
+            ICM_WriteIReg(sensor, 0xA4U, 0xA6U, reg_val);
+
+            /* ШАГ 9: clk_src_sel = 1 — REG_MISC1 (0x39) User Bank 0, это ПРЯМОЙ */
+            ICM_WriteReg(sensor, ICM45686_REG_REG_MISC1, ICM45686_CLK_SRC_EXTERNAL);
+
+            /* ШАГ 10: rtc_mode = 1 — RTC_CONFIG (0x26) User Bank 0, это ПРЯМОЙ */
+            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
+            reg_val |= ICM45686_RTC_MODE_EN;
+            ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
+
+            ICM_DelayMs(1U);
+
+            /* ШАГ 12: Поллинг PLL_RDY (INT1_STATUS1 bit0), таймаут 20 мс */
             timeout = ICM45686_PLL_TIMEOUT_MS;
             status  = 0U;
 
@@ -467,18 +456,7 @@ uint32_t ICM_InitAllSensors(void)
                 g_clk_fail_mask |= (1UL << sensor->sensor_id);
             }
 
-            /* ШАГ 8: RTC_CONFIG — включить только если PLL захватил клок
-             *   RTC_CONFIG (0x26), bit1 = RTC_MODE_EN = 1
-             *   По Section 17.37 (DS-000577)
-             */
-            if ((g_clk_ok_mask & (1UL << sensor->sensor_id)) != 0U)
-            {
-                ICM_WriteReg(sensor,
-                             ICM45686_REG_RTC_CONFIG,
-                             ICM45686_RTC_MODE_EN);
-            }
-
-            /* ШАГ 9: FSR и ODR */
+            /* ШАГ 13: FSR и ODR */
             ICM_WriteReg(sensor,
                          ICM45686_REG_ACCEL_CONFIG0,
                          ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
@@ -487,17 +465,17 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_GYRO_CONFIG0,
                          ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE);
 
-            /* ШАГ 10: Конфигурация FIFO */
+            /* ШАГ 14: Конфигурация FIFO */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG0,
-                         ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_2K);
+                         ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
 
             ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG10,
+                         ICM45686_REG_FIFO_CONFIG1_0,
                          (uint8_t)(ICM_FIFO_WATERMARK_BYTES & 0x00FFU));
 
             ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG11,
+                         ICM45686_REG_FIFO_CONFIG1_1,
                          (uint8_t)((ICM_FIFO_WATERMARK_BYTES >> 8U) & 0x00FFU));
 
             ICM_WriteReg(sensor,
@@ -520,12 +498,12 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG2,
                          ICM45686_FIFO_FLUSH);
 
-            /* ШАГ 11: PWR_MGMT0: Gyro LN + Accel LN */
+            /* ШАГ 15: PWR_MGMT0: Gyro LN + Accel LN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_PWR_MGMT0,
                          ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
 
-            /* ШАГ 12: Startup delay */
+            /* ШАГ 16: Startup delay */
             ICM_DelayMs(ICM45686_STARTUP_DELAY_MS);
         }
     }
@@ -678,7 +656,7 @@ static void ICM_NextSensor(ICM_Bus_t *bus)
 }
 
 /* ===========================================================================
- *  ICM_OnSpiEot (static) — конец SPI транзакции
+ *  ICM_OnSpiEot (static)
  * ========================================================================== */
 static void ICM_OnSpiEot(ICM_Bus_t *bus)
 {

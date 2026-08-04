@@ -1,0 +1,15 @@
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:489:22:LL_DMA_EnableStream	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:511:22:LL_DMA_DisableStream	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:533:26:LL_DMA_IsEnabledStream	2
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:1051:22:LL_DMA_SetDataLength	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:1840:22:LL_DMA_SetMemoryAddress	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:1865:22:LL_DMA_SetPeriphAddress	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:2612:22:LL_DMA_ClearFlag_TC1	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:2700:22:LL_DMA_ClearFlag_TE1	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:3014:22:LL_DMA_EnableIT_TC	1
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h:4150:22:LL_USART_EnableDMAReq_TX	2
+../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h:4220:26:LL_USART_DMA_GetRegAddr	2
+../Core/Src/uart_telemetry.c:48:17:CRC16_CCITT	4
+../Core/Src/uart_telemetry.c:81:6:UART_Telemetry_Init	1
+../Core/Src/uart_telemetry.c:106:6:UART_SendBatch	3
+../Core/Src/uart_telemetry.c:174:6:UART_DMA_TxComplete	1
