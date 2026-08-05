@@ -10,7 +10,7 @@
  *  7.  IREG 0xA57B[1:0]=0b10   — accel_src_ctrl = FIR+interp
  *  8.  IREG 0xA4A6[6:5]=0b10   — gyro_src_ctrl  = FIR+interp
  *  9а. IREG 0xA258[bit0]=1     — tmst_en = 1  ← СНАЧАЛА счётчик
- *  9б. 0x26[bit5]=1            — rtc_mode = 1 ← ПОТОМ CLKIN
+ *  9б. 0x26[bit5|bit6]=1       — rtc_mode + rtc_align ← ПОТОМ CLKIN
  * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400 Гц, FSR)
  * 11.  FIFO (watermark, config3, config4, flush)
  * 12.  PWR_MGMT0: Gyro LN + Accel LN
@@ -31,7 +31,7 @@ static void    ICM_SPI_DrainRx        (SPI_TypeDef *spi, uint32_t n);
 static uint8_t ICM_BusIndex           (const ICM_Bus_t *bus);
 static uint8_t ICM_FindNextHealthy    (const ICM_Bus_t *bus, uint8_t from);
 static void    ICM_ClearDmaFlags      (const ICM_Bus_t *bus);
-static void    ICM_WaitIRegReady      (void);          /* ← ИСПРАВЛЕНИЕ 1 */
+static void    ICM_WaitIRegReady      (void);
 static void    ICM_StartBusRead       (ICM_Bus_t *bus, uint8_t idx);
 static void    ICM_NextSensor         (ICM_Bus_t *bus);
 static void    ICM_OnSpiEot           (ICM_Bus_t *bus);
@@ -225,13 +225,12 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
 }
 
 /* =============================================================================
- * ИСПРАВЛЕНИЕ 1: ICM_WaitIRegReady — задержка вместо polling.
+ * ПРАВКА 1: ICM_WaitIRegReady — задержка 10 мкс вместо polling.
  *
- * REG_MISC2 bit0 (ICM45686_MISC2_IREG_DONE) в ICM-45686 — это флаг
- * soft_rst_done, а НЕ флаг готовности IREG-транзакции. Polling этого
- * бита не гарантирует завершения записи в IREG и может зависнуть,
- * из-за чего tmst_en и другие IREG-биты не записываются.
- * По даташиту достаточно ≥ 4 мкс. Используем 10 мкс с запасом.
+ * ICM45686_MISC2_IREG_DONE (REG_MISC2 bit0) — это soft_rst_done,
+ * НЕ флаг готовности IREG. Polling этого бита блокировал запись
+ * tmst_en и других IREG-регистров → timestamp всегда 0x0000.
+ * Даташит: достаточно ≥ 4 мкс после IREG_DATA. Берём 10 мкс.
  * =============================================================================
  */
 static void ICM_WaitIRegReady(void)
@@ -292,7 +291,7 @@ uint32_t ICM_InitAllSensors(void)
                 continue;
             }
 
-            /* ШАГ 2 */
+            /* ШАГ 2: Soft Reset */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
             ICM_DelayUs(ICM45686_RESET_DELAY_US);
 
@@ -341,15 +340,16 @@ uint32_t ICM_InitAllSensors(void)
                                     ICM45686_IREG_GYRO_SRC_CTRL_L);
             reg_val  = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) |
                        (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
-            ICM_WriteIReg(sensor,\
+            ICM_WriteIReg(sensor,
                           ICM45686_IREG_GYRO_SRC_CTRL_H,
                           ICM45686_IREG_GYRO_SRC_CTRL_L,
                           reg_val);
 
-            /* ШАГ 9а: СНАЧАЛА tmst_en = 1 (IREG 0xA258, bit0)
-             * ИСПРАВЛЕНИЕ 2: tmst_en должен быть включён ДО rtc_mode.
-             * Если сначала подать CLKIN через rtc_mode, а потом включить
-             * счётчик — первые пакеты получают timestamp = 0x0000.
+            /* ШАГ 9а: ПРАВКА 2 — СНАЧАЛА tmst_en=1 (IREG 0xA258, bit0)
+             *
+             * Счётчик timestamp должен быть запущен ДО подачи CLKIN.
+             * Иначе при старте rtc_mode счётчик ещё не готов и
+             * первые (и все последующие) пакеты дают timestamp=0x0000.
              */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_SMC_CONTROL_0_H,
@@ -360,9 +360,16 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_SMC_CONTROL_0_L,
                           reg_val);
 
-            /* ШАГ 9б: ПОТОМ rtc_mode = 1 (0x26, bit5) */
+            /* ШАГ 9б: ПРАВКА 3 — ПОТОМ rtc_mode=1 + rtc_align=1 (0x26)
+             *
+             * rtc_align (bit6) выдаёт однократный выравнивающий импульс
+             * для синхронизации внутреннего счётчика с фронтом CLKIN.
+             * Самосбрасывается аппаратно — очищать вручную не нужно.
+             * Без rtc_align счётчик может стартовать с произвольной
+             * фазой и давать нестабильный/нулевой timestamp.
+             */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
-            reg_val |= ICM45686_RTC_MODE_EN;
+            reg_val |= ICM45686_RTC_MODE_EN | ICM45686_RTC_ALIGN_EN;
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
 
             reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
