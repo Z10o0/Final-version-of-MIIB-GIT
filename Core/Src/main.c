@@ -142,11 +142,6 @@ int main(void)
   uint32_t imu_faults = ICM_InitAllSensors();
   (void)imu_faults;  /* debug: breakpoint здесь для проверки fault-маски */
 
-  volatile uint32_t clk_ok   = g_clk_ok_mask;    /* ожидаем 0x0003FFFF */
-  volatile uint32_t clk_fail = g_clk_fail_mask;  /* ожидаем 0x00000000 */
-  (void)clk_ok;
-  (void)clk_fail;
-
 
   /* Инициализация UART-телеметрии (DMA TX) */
   UART_Telemetry_Init();

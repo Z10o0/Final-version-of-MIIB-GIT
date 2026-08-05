@@ -70,6 +70,16 @@ volatile uint32_t g_sensor_fault_mask = 0U;
 volatile uint32_t g_dma_error_mask    = 0U;
 volatile uint32_t g_tim6_skip_count   = 0U;
 
+/*
+ * Диагностика внешнего тактирования (CLKIN).
+ * Заполняются в ICM_InitAllSensors():
+ *   g_clk_ok_mask   — бит=1 если датчик успешно захватил CLKIN (rtc_mode=1 подтверждён)
+ *   g_clk_fail_mask — бит=1 если захват не удался (rtc_mode не установился)
+ * Ожидаемое состояние после инициализации: ok=0x0003FFFF, fail=0x00000000
+ */
+volatile uint32_t g_clk_ok_mask   = 0U;
+volatile uint32_t g_clk_fail_mask = 0U;
+
 /* ===========================================================================
  *  Таблица шин
  * ========================================================================== */
@@ -175,6 +185,8 @@ void ICM_BusesInit(void)
     g_sensor_fault_mask = 0U;
     g_dma_error_mask    = 0U;
     g_tim6_skip_count   = 0U;
+    g_clk_ok_mask       = 0U;
+    g_clk_fail_mask     = 0U;
 }
 
 /* ===========================================================================
@@ -331,6 +343,8 @@ uint32_t ICM_InitAllSensors(void)
     uint8_t  reg_val;
 
     g_sensor_fault_mask = 0U;
+    g_clk_ok_mask       = 0U;
+    g_clk_fail_mask     = 0U;
 
     ICM_DelayMs(3U);
 
@@ -425,6 +439,17 @@ uint32_t ICM_InitAllSensors(void)
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
             reg_val |= ICM45686_RTC_MODE_EN;
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
+
+            /* Верификация: читаем обратно — заполняем маски */
+            reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
+            if ((reg_val & ICM45686_RTC_MODE_EN) != 0U)
+            {
+                g_clk_ok_mask   |= (1UL << sensor->sensor_id);
+            }
+            else
+            {
+                g_clk_fail_mask |= (1UL << sensor->sensor_id);
+            }
 
             /* ШАГ 10: ODR 6400 Гц + FSR */
             ICM_WriteReg(sensor,
