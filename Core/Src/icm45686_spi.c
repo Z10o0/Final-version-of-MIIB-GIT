@@ -2,24 +2,31 @@
  * icm45686_spi.c — ПАРАЛЛЕЛЬНАЯ версия, все 3 шины SPI работают одновременно
  *
  *  1.  WHO_AM_I
- *  2.  Soft Reset (REG_MISC2 bit1), задержка 2 мс
- *  3.  WHO_AM_I после сброса
+ *  2.  Soft Reset (REG_MISC2 bit1)
+ *  3.  Ждём INT1_STATUS0 bit7 (RESET_DONE) — надёжнее чем WHO_AM_I
  *  4.  0x30[bit1]=1, [bit0]=0  — AUX1 off
  *  5.  0x31[bit2]=1, [1:0]=10b — INT2 → CLKIN
  *  6.  IREG 0xA268[bit2]=0     — I3C STC mode off
  *  7.  IREG 0xA57B[1:0]=0b10   — accel_src_ctrl = FIR+interp
  *  8.  IREG 0xA4A6[6:5]=0b10   — gyro_src_ctrl  = FIR+interp
- *  9а. IREG 0xA258[bit0]=1     — tmst_en = 1  ← СНАЧАЛА счётчик
- *  9б. 0x26[bit5|bit6]=1       — rtc_mode + rtc_align ← ПОТОМ CLKIN
- * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400 Гц, FSR)
- * 11.  FIFO (watermark, config3, config4, flush)
- * 12.  PWR_MGMT0: Gyro LN + Accel LN
+ *  9а. IREG 0xA258[bit4|bit0]  — ACCEL_LP_CLK_SEL + tmst_en (оба при CLKIN!)
+ *  9б. 0x26[bit6|bit5]=1       — rtc_align + rtc_mode
+ * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0
+ * 11.  PWR_MGMT0: Gyro LN + Accel LN  ← ДО FIFO
+ * 12.  FIFO (watermark, config3, config4, flush)
  * 13.  Startup delay 200 мс
  * =============================================================================
  */
 
 #include "icm45686_spi.h"
 #include <string.h>
+
+/* ШАГ 3: INT1_STATUS0 (0x19), bit7 = reset_done_int */
+#define ICM45686_INT1_STATUS0_RESET_DONE    (1U << 7)
+/* ШАГ 9а: SMC_CONTROL_0 bit4 = accel_lp_clk_sel — переключает тактирование
+ * акселерометра на внешний CLKIN. Без этого бита при rtc_mode=1 timestamp
+ * тикает от CLKIN, а акселерометр — от внутреннего RC → рассинхрон → 0x0000 */
+#define ICM45686_ACCEL_LP_CLK_SEL           (1U << 4)
 
 static void    ICM_DelayUs            (uint32_t us);
 static void    ICM_DelayMs            (uint32_t ms);
@@ -224,15 +231,6 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
     return result;
 }
 
-/* =============================================================================
- * ПРАВКА 1: ICM_WaitIRegReady — задержка 10 мкс вместо polling.
- *
- * ICM45686_MISC2_IREG_DONE (REG_MISC2 bit0) — это soft_rst_done,
- * НЕ флаг готовности IREG. Polling этого бита блокировал запись
- * tmst_en и других IREG-регистров → timestamp всегда 0x0000.
- * Даташит: достаточно ≥ 4 мкс после IREG_DATA. Берём 10 мкс.
- * =============================================================================
- */
 static void ICM_WaitIRegReady(void)
 {
     ICM_DelayUs(10U);
@@ -271,6 +269,7 @@ uint32_t ICM_InitAllSensors(void)
     uint8_t  bus_idx;
     uint8_t  sensor_idx;
     uint8_t  reg_val;
+    uint32_t timeout;
 
     g_sensor_fault_mask = 0U;
     g_clk_ok_mask       = 0U;
@@ -284,7 +283,7 @@ uint32_t ICM_InitAllSensors(void)
         {
             ICM_Sensor_t *sensor = &buses[bus_idx]->sensors[sensor_idx];
 
-            /* ШАГ 1 */
+            /* ШАГ 1: WHO_AM_I до сброса */
             if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE)
             {
                 ICM_MarkFault(sensor);
@@ -293,10 +292,22 @@ uint32_t ICM_InitAllSensors(void)
 
             /* ШАГ 2: Soft Reset */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
-            ICM_DelayUs(ICM45686_RESET_DELAY_US);
 
-            /* ШАГ 3 */
-            if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE)
+            /* ШАГ 3: Ждём RESET_DONE (INT1_STATUS0 bit7), таймаут 10 мс.
+             *
+             * ArduPilot/Betaflight используют именно этот флаг.
+             * WHO_AM_I может ответить раньше полного завершения сброса,
+             * из-за чего последующие IREG-записи (в т.ч. tmst_en) теряются.
+             */
+            timeout = 1000U;
+            do {
+                ICM_DelayUs(10U);
+                reg_val = ICM_ReadReg(sensor, ICM45686_REG_INT1_STATUS0);
+                timeout--;
+            } while (((reg_val & ICM45686_INT1_STATUS0_RESET_DONE) == 0U) &&
+                     (timeout != 0U));
+
+            if (timeout == 0U)
             {
                 ICM_MarkFault(sensor);
                 continue;
@@ -345,31 +356,33 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_GYRO_SRC_CTRL_L,
                           reg_val);
 
-            /* ШАГ 9а: ПРАВКА 2 — СНАЧАЛА tmst_en=1 (IREG 0xA258, bit0)
+            /* ШАГ 9а: IREG 0xA258 — tmst_en (bit0) + ACCEL_LP_CLK_SEL (bit4)
              *
-             * Счётчик timestamp должен быть запущен ДО подачи CLKIN.
-             * Иначе при старте rtc_mode счётчик ещё не готов и
-             * первые (и все последующие) пакеты дают timestamp=0x0000.
+             * ACCEL_LP_CLK_SEL (bit4) КРИТИЧЕН при CLKIN!
+             * Без него акселерометр тактируется от внутреннего RC-генератора,
+             * а timestamp-счётчик — от CLKIN. Из-за рассинхрона датчик
+             * не может корректно проставить поле timestamp в FIFO-пакет
+             * и заполняет его нулями (0x0000), даже если TMST_FIELD_EN=1
+             * в заголовке пакета.
+             * Источник: ArduPilot/AP_InertialSensor_Invensensev3.cpp [web:48]
              */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_SMC_CONTROL_0_H,
                                     ICM45686_IREG_SMC_CONTROL_0_L);
-            reg_val |= ICM45686_TMST_EN;
+            reg_val |= ICM45686_TMST_EN | ICM45686_ACCEL_LP_CLK_SEL;
             ICM_WriteIReg(sensor,
                           ICM45686_IREG_SMC_CONTROL_0_H,
                           ICM45686_IREG_SMC_CONTROL_0_L,
                           reg_val);
 
-            /* ШАГ 9б: ПРАВКА 3 — ПОТОМ rtc_mode=1 + rtc_align=1 (0x26)
+            /* ШАГ 9б: rtc_align (bit6) + rtc_mode (bit5)
              *
-             * rtc_align (bit6) выдаёт однократный выравнивающий импульс
-             * для синхронизации внутреннего счётчика с фронтом CLKIN.
-             * Самосбрасывается аппаратно — очищать вручную не нужно.
-             * Без rtc_align счётчик может стартовать с произвольной
-             * фазой и давать нестабильный/нулевой timestamp.
+             * rtc_align выдаёт однократный выравнивающий импульс для
+             * синхронизации счётчика с фронтом CLKIN. Самосбрасывается.
+             * Порядок: сначала align+mode вместе, потом проверяем mode.
              */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
-            reg_val |= ICM45686_RTC_MODE_EN | ICM45686_RTC_ALIGN_EN;
+            reg_val |= ICM45686_RTC_ALIGN_EN | ICM45686_RTC_MODE_EN;
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
 
             reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
@@ -387,7 +400,20 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_GYRO_CONFIG0,
                          ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE);
 
-            /* ШАГ 11: FIFO */
+            /* ШАГ 11: PWR_MGMT0 — ДО FIFO!
+             *
+             * Питание датчика должно быть включено до запуска FIFO,
+             * иначе первые пакеты могут быть невалидными.
+             * Порядок как в ArduPilot: pwr → fifo_config → flush.
+             */
+            ICM_WriteReg(sensor,
+                         ICM45686_REG_PWR_MGMT0,
+                         ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
+
+            /* Задержка после включения питания перед конфигурацией FIFO */
+            ICM_DelayMs(5U);
+
+            /* ШАГ 12: FIFO */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG0,
                          ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
@@ -400,10 +426,12 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG1_1,
                          (uint8_t)((ICM_FIFO_WATERMARK_PACKETS >> 8U) & 0x00FFU));
 
+            /* Сначала без IF_EN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN);
 
+            /* Потом с IF_EN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN |
@@ -417,12 +445,7 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG2,
                          ICM45686_FIFO_FLUSH);
 
-            /* ШАГ 12 */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_PWR_MGMT0,
-                         ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
-
-            /* ШАГ 13 */
+            /* ШАГ 13: Startup delay */
             ICM_DelayMs(ICM45686_STARTUP_DELAY_MS);
         }
     }
