@@ -140,13 +140,12 @@ int main(void)
   ICM_BusesInit();
 
   uint32_t imu_faults = ICM_InitAllSensors();
+  (void)imu_faults;  /* debug: breakpoint здесь для проверки fault-маски */
 
-  /* Диагностика внешнего тактирования:
-   * g_clk_ok_mask   — датчики, захватившие CLKIN (все 18 бит = 0x3FFFF = 262143)
-   * g_clk_fail_mask — датчики, у которых внешний клок НЕ захватился
-   * Поставь breakpoint здесь или выведи через UART для анализа. */
   volatile uint32_t clk_ok   = g_clk_ok_mask;    /* ожидаем 0x0003FFFF */
   volatile uint32_t clk_fail = g_clk_fail_mask;  /* ожидаем 0x00000000 */
+  (void)clk_ok;
+  (void)clk_fail;
 
 
   /* Инициализация UART-телеметрии (DMA TX) */

@@ -1,26 +1,26 @@
 /* =============================================================================
- * icm45686_spi.c  — ПАРАЛЛЕЛЬНАЯ версия, все 3 шины SPI работают одновременно
+ * icm45686_spi.c — ПАРАЛЛЕЛЬНАЯ версия, все 3 шины SPI работают одновременно
  *
- * Алгоритм включения внешнего CLKIN — строго по TDK reference driver:
- *   tdk-invn-oss/motion.mcu.icm45686.driver
- *   inv_imu_driver_advanced.c → inv_imu_adv_enable_clkin_rtc()
+ * Последовательность инициализации CLKIN по inv_imu_regmap_le.h:
  *
- * Последовательность CLKIN (4 шага TDK):
- *  1. SIFS_I3C_STC_CFG (0x27): i3c_stc_mode = 0
- *     "I3CSM STC has higher priority over CLKIN — must be disabled first"
- *  2. IPREG_SYS2_REG_123 (IREG A5:7B): accel_src_ctrl = 0b10 (FIR+interp ON)
- *  3. IPREG_SYS1_REG_166 (IREG A4:A6): gyro_src_ctrl  = 0b10 (FIR+interp ON)
- *  4. RTC_CONFIG (0x26): rtc_mode = 1
- *
- * Пин INT2 как CLKIN:
- *  - IOC_PAD_AUX_OVRD (0x30): aux2_enable_ovrd=1, aux2_enable_ovrd_val=0
- *  - IOC_PAD_SCENARIO_OVRD (0x2F): pads_int2_cfg_ovrd=1, val=0b10 (CLKIN)
- *  - REG_MISC1 (0x39): clk_src_sel = 1
+ *  1.  WHO_AM_I
+ *  2.  Soft Reset (REG_MISC2 bit1), задержка 2 мс
+ *  3.  WHO_AM_I после сброса
+ *  4.  0x30[bit1]=1, [bit0]=0  — AUX1 off (aux1_enable_ovrd=1, val=0)
+ *  5.  0x31[bit2]=1, [1:0]=10b — INT2 → CLKIN
+ *  6.  IREG 0xA268[bit2]=0     — I3C STC mode off
+ *  7.  IREG 0xA57B[1:0]=0b10   — accel_src_ctrl = FIR+interp
+ *  8.  IREG 0xA4A6[6:5]=0b10   — gyro_src_ctrl  = FIR+interp
+ *  9.  0x26[bit5]=1            — rtc_mode = 1 (включение CLKIN)
+ * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400 Гц, FSR)
+ * 11.  FIFO (watermark, config3, config4, flush)
+ * 12.  PWR_MGMT0: Gyro LN + Accel LN
+ * 13.  Startup delay 200 мс
  *
  * Шины и DMA:
- *   SPI1  RX→DMA1/Stream2   TX→DMA1/Stream3   датчики 0..5
- *   SPI5  RX→DMA2/Stream2   TX→DMA2/Stream3   датчики 6..11
- *   SPI4  RX→DMA2/Stream0   TX→DMA2/Stream1   датчики 12..17
+ *   SPI1  RX→DMA1/Stream2  TX→DMA1/Stream3  датчики 0..5
+ *   SPI5  RX→DMA2/Stream2  TX→DMA2/Stream3  датчики 6..11
+ *   SPI4  RX→DMA2/Stream0  TX→DMA2/Stream1  датчики 12..17
  * =============================================================================
  */
 
@@ -30,23 +30,23 @@
 /* ===========================================================================
  *  Прототипы локальных функций
  * ========================================================================== */
-static void    ICM_DelayUs           (uint32_t us);
-static void    ICM_DelayMs           (uint32_t ms);
-static void    ICM_CS_Low            (const ICM_Sensor_t *s);
-static void    ICM_CS_High           (const ICM_Sensor_t *s);
-static void    ICM_SPI_EnsureDisabled(SPI_TypeDef *spi);
-static void    ICM_SPI_WaitEOT       (SPI_TypeDef *spi);
-static void    ICM_SPI_DrainRx       (SPI_TypeDef *spi, uint32_t n);
-static uint8_t ICM_BusIndex          (const ICM_Bus_t *bus);
-static uint8_t ICM_FindNextHealthy   (const ICM_Bus_t *bus, uint8_t from);
-static void    ICM_ClearDmaFlags     (const ICM_Bus_t *bus);
-static uint8_t ICM_WaitIRegDone      (ICM_Sensor_t *sensor);
-static void    ICM_StartBusRead      (ICM_Bus_t *bus, uint8_t idx);
-static void    ICM_NextSensor        (ICM_Bus_t *bus);
-static void    ICM_OnSpiEot          (ICM_Bus_t *bus);
-static void    ICM_FinishBus         (ICM_Bus_t *bus);
-static void    ICM_TryCompleteBatch  (void);
-static void    ICM_MarkFault         (ICM_Sensor_t *s);
+static void    ICM_DelayUs            (uint32_t us);
+static void    ICM_DelayMs            (uint32_t ms);
+static void    ICM_CS_Low             (const ICM_Sensor_t *s);
+static void    ICM_CS_High            (const ICM_Sensor_t *s);
+static void    ICM_SPI_EnsureDisabled (SPI_TypeDef *spi);
+static void    ICM_SPI_WaitEOT        (SPI_TypeDef *spi);
+static void    ICM_SPI_DrainRx        (SPI_TypeDef *spi, uint32_t n);
+static uint8_t ICM_BusIndex           (const ICM_Bus_t *bus);
+static uint8_t ICM_FindNextHealthy    (const ICM_Bus_t *bus, uint8_t from);
+static void    ICM_ClearDmaFlags      (const ICM_Bus_t *bus);
+static uint8_t ICM_WaitIRegDone       (ICM_Sensor_t *sensor);
+static void    ICM_StartBusRead       (ICM_Bus_t *bus, uint8_t idx);
+static void    ICM_NextSensor         (ICM_Bus_t *bus);
+static void    ICM_OnSpiEot           (ICM_Bus_t *bus);
+static void    ICM_FinishBus          (ICM_Bus_t *bus);
+static void    ICM_TryCompleteBatch   (void);
+static void    ICM_MarkFault          (ICM_Sensor_t *s);
 
 /* ===========================================================================
  *  DMA-буферы в D2 SRAM (Not Cacheable по MPU Region)
@@ -69,8 +69,6 @@ volatile uint8_t  g_dma_cycle_active  = 0U;
 volatile uint32_t g_sensor_fault_mask = 0U;
 volatile uint32_t g_dma_error_mask    = 0U;
 volatile uint32_t g_tim6_skip_count   = 0U;
-volatile uint32_t g_clk_ok_mask       = 0U;
-volatile uint32_t g_clk_fail_mask     = 0U;
 
 /* ===========================================================================
  *  Таблица шин
@@ -250,7 +248,7 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
 }
 
 /* ===========================================================================
- *  ICM_WaitIRegDone — поллинг REG_MISC2[bit0] = IREG_DONE
+ *  ICM_WaitIRegDone
  * ========================================================================== */
 static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
 {
@@ -275,7 +273,7 @@ static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
 }
 
 /* ===========================================================================
- *  ICM_WriteIReg — запись в Internal Register (Section 14.4)
+ *  ICM_WriteIReg — запись в Internal Register
  * ========================================================================== */
 void ICM_WriteIReg(ICM_Sensor_t *sensor,
                    uint8_t       addr_h,
@@ -285,13 +283,12 @@ void ICM_WriteIReg(ICM_Sensor_t *sensor,
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
     ICM_WaitIRegDone(sensor);
-
     ICM_WriteReg(sensor, ICM45686_REG_IREG_DATA, value);
     ICM_WaitIRegDone(sensor);
 }
 
 /* ===========================================================================
- *  ICM_ReadIReg — чтение из Internal Register (Section 14.5)
+ *  ICM_ReadIReg — чтение из Internal Register
  * ========================================================================== */
 uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
                      uint8_t       addr_h,
@@ -300,35 +297,26 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
     ICM_WaitIRegDone(sensor);
-
     return ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
 }
 
 /* ===========================================================================
  *  ICM_InitAllSensors
  *
- *  Последовательность инициализации:
- *
- *  ШАГ 1.  WHO_AM_I = 0xE9
- *  ШАГ 2.  Soft Reset (REG_MISC2 bit1), задержка 2 мс
- *  ШАГ 3.  WHO_AM_I после сброса
- *
- *  -- CLKIN (строго по TDK inv_imu_adv_enable_clkin_rtc) --
- *  ШАГ 4.  IOC_PAD_AUX_OVRD (0x30): aux2_enable_ovrd=1, val=0 → AUX2 off
- *  ШАГ 5.  IOC_PAD_SCENARIO_OVRD (0x2F): pads_int2_cfg_ovrd=1, val=0b10 (CLKIN)
- *  ШАГ 6.  SIFS_I3C_STC_CFG (0x27): i3c_stc_mode = 0
- *  ШАГ 7.  IPREG_SYS2_REG_123 (IREG A5:7B): accel_src_ctrl = 0b10
- *  ШАГ 8.  IPREG_SYS1_REG_166 (IREG A4:A6): gyro_src_ctrl  = 0b10
- *  ШАГ 9.  REG_MISC1 (0x39): clk_src_sel = 1 (внешний CLKIN)
- *  ШАГ 10. RTC_CONFIG (0x26): rtc_mode = 1  (безусловно, как в TDK)
- *  ШАГ 11. Задержка 1 мс — стабилизация PLL
- *  ШАГ 12. Поллинг PLL_RDY (INT1_STATUS1 bit0), таймаут 20 мс
- *  -- конец CLKIN --
- *
- *  ШАГ 13. FSR и ODR
- *  ШАГ 14. Конфигурация FIFO
- *  ШАГ 15. PWR_MGMT0: Gyro LN + Accel LN
- *  ШАГ 16. Startup delay 200 мс
+ *  Шаги (сверены с inv_imu_regmap_le.h):
+ *   1.  WHO_AM_I = 0xE9
+ *   2.  Soft Reset, задержка 2 мс
+ *   3.  WHO_AM_I после сброса
+ *   4.  0x30: AUX1 off  (bit1=aux1_enable_ovrd=1, bit0=aux1_enable_ovrd_val=0)
+ *   5.  0x31: INT2→CLKIN (bit2=pads_int2_cfg_ovrd=1, bits[1:0]=0b10)
+ *   6.  IREG 0xA268: I3C STC off (bit2=i3c_stc_mode=0)
+ *   7.  IREG 0xA57B: accel_src_ctrl=0b10 (bits[1:0])
+ *   8.  IREG 0xA4A6: gyro_src_ctrl=0b10  (bits[6:5])
+ *   9.  0x26: rtc_mode=1 (bit5) — включение CLKIN
+ *  10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400, FSR)
+ *  11.  FIFO (config0, watermark, config3, config4, flush)
+ *  12.  PWR_MGMT0: Gyro LN + Accel LN
+ *  13.  Startup delay 200 мс
  * ========================================================================== */
 uint32_t ICM_InitAllSensors(void)
 {
@@ -340,13 +328,9 @@ uint32_t ICM_InitAllSensors(void)
     };
     uint8_t  bus_idx;
     uint8_t  sensor_idx;
-    uint8_t  status;
-    uint32_t timeout;
     uint8_t  reg_val;
 
     g_sensor_fault_mask = 0U;
-    g_clk_ok_mask       = 0U;
-    g_clk_fail_mask     = 0U;
 
     ICM_DelayMs(3U);
 
@@ -356,14 +340,14 @@ uint32_t ICM_InitAllSensors(void)
         {
             ICM_Sensor_t *sensor = &buses[bus_idx]->sensors[sensor_idx];
 
-            /* ШАГ 1: WHO_AM_I до сброса */
+            /* ШАГ 1: WHO_AM_I */
             if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE)
             {
                 ICM_MarkFault(sensor);
                 continue;
             }
 
-            /* ШАГ 2: Soft Reset (REG_MISC2 bit1 = 0x02) */
+            /* ШАГ 2: Soft Reset */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
             ICM_DelayUs(ICM45686_RESET_DELAY_US);
 
@@ -374,89 +358,75 @@ uint32_t ICM_InitAllSensors(void)
                 continue;
             }
 
-            /* ================================================================
-             *  CLKIN — по TDK inv_imu_adv_enable_clkin_rtc() + set_int2_pin_usage()
-             *
-             *  ИСПРАВЛЕНИЕ: IOC_PAD_SCENARIO_OVRD и IOC_PAD_AUX_OVRD — IREG регистры
-             *  в банке IPREG_TOP1 (0xA2), а НЕ прямые User Bank 0!
-             *
-             *  inv_imu_regmap_le.h:
-             *    IOC_PAD_SCENARIO_OVRD → IPREG_TOP1 base=0xA200, offset=0x31
-             *    IOC_PAD_AUX_OVRD      → IPREG_TOP1 base=0xA200, offset=0x32
-             *    SIFS_I3C_STC_CFG      → IPREG_TOP1 base=0xA200, offset=0x52
-             * ================================================================ */
-
-            /* ШАГ 4: AUX2 off — IREG 0xA2:0x32
-             *  bit2 aux2_enable_ovrd = 1
-             *  bit1 aux2_enable_ovrd_val = 0
+            /* ШАГ 4: AUX1 off
+             *  IOC_PAD_SCENARIO_AUX_OVRD (0x30) — прямой User Bank 0
+             *  bit1 = aux1_enable_ovrd = 1
+             *  bit0 = aux1_enable_ovrd_val = 0
              */
-            reg_val  = ICM_ReadIReg(sensor, 0xA2U, 0x32U);
-            reg_val |=  (1U << 2);   /* aux2_enable_ovrd = 1 */
-            reg_val &= ~(1U << 1);   /* aux2_enable_ovrd_val = 0 */
-            ICM_WriteIReg(sensor, 0xA2U, 0x32U, reg_val);
+            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD);
+            reg_val |=  ICM45686_AUX1_ENABLE_OVRD;      /* bit1 = 1 */
+            reg_val &= ~ICM45686_AUX1_ENABLE_OVRD_VAL;  /* bit0 = 0 */
+            ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD, reg_val);
 
-            /* ШАГ 5: Пин INT2 → CLKIN — IREG 0xA2:0x31
-             *  bit2 pads_int2_cfg_ovrd = 1
-             *  bits[1:0] pads_int2_cfg_ovrd_val = 0b10 (CLKIN)
+            /* ШАГ 5: INT2 → CLKIN
+             *  IOC_PAD_SCENARIO_OVRD (0x31) — прямой User Bank 0
+             *  bit2 = pads_int2_cfg_ovrd = 1
+             *  bits[1:0] = pads_int2_cfg_ovrd_val = 0b10 (CLKIN)
              */
-            reg_val  = ICM_ReadIReg(sensor, 0xA2U, 0x31U);
-            reg_val |=  (1U << 2);              /* ovrd_en = 1 */
-            reg_val  = (reg_val & ~0x03U) | 0x02U; /* val = 0b10 */
-            ICM_WriteIReg(sensor, 0xA2U, 0x31U, reg_val);
+            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD);
+            reg_val |=  ICM45686_INT2_CFG_OVRD_EN;               /* bit2 = 1 */
+            reg_val  = (reg_val & ~0x03U) | ICM45686_INT2_CFG_CLKIN_VAL; /* [1:0]=0b10 */
+            ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD, reg_val);
 
-            /* ШАГ 6: I3C STC Mode off — IREG 0xA2:0x52
-             *  bit0 i3c_stc_mode = 0
+            /* ШАГ 6: I3C STC mode off
+             *  SIFS_I3C_STC_CFG — IREG 0xA268
+             *  bit2 = i3c_stc_mode = 0
              */
-            reg_val  = ICM_ReadIReg(sensor, 0xA2U, 0x52U);
-            reg_val &= ~(1U << 0);
-            ICM_WriteIReg(sensor, 0xA2U, 0x52U, reg_val);
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_I3C_STC_CFG_H,
+                                    ICM45686_IREG_I3C_STC_CFG_L);
+            reg_val &= ~ICM45686_I3C_STC_MODE_BIT;
+            ICM_WriteIReg(sensor,
+                          ICM45686_IREG_I3C_STC_CFG_H,
+                          ICM45686_IREG_I3C_STC_CFG_L,
+                          reg_val);
 
-            /* ШАГ 7: accel_src_ctrl = 0b10 — IREG 0xA5:0x7B */
-            reg_val  = ICM_ReadIReg(sensor, 0xA5U, 0x7BU);
-            reg_val  = (reg_val & ~0x03U) | 0x02U;
-            ICM_WriteIReg(sensor, 0xA5U, 0x7BU, reg_val);
+            /* ШАГ 7: accel_src_ctrl = 0b10 (FIR+interp)
+             *  IPREG_SYS2_REG_123 — IREG 0xA57B
+             *  bits[1:0] = accel_src_ctrl
+             */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_ACCEL_SRC_CTRL_H,
+                                    ICM45686_IREG_ACCEL_SRC_CTRL_L);
+            reg_val  = (reg_val & ~0x03U) | ICM45686_ACCEL_SRC_FIR_INTERP;
+            ICM_WriteIReg(sensor,
+                          ICM45686_IREG_ACCEL_SRC_CTRL_H,
+                          ICM45686_IREG_ACCEL_SRC_CTRL_L,
+                          reg_val);
 
-            /* ШАГ 8: gyro_src_ctrl = 0b10 — IREG 0xA4:0xA6 */
-            reg_val  = ICM_ReadIReg(sensor, 0xA4U, 0xA6U);
-            reg_val  = (reg_val & ~0x03U) | 0x02U;
-            ICM_WriteIReg(sensor, 0xA4U, 0xA6U, reg_val);
+            /* ШАГ 8: gyro_src_ctrl = 0b10 (FIR+interp)
+             *  IPREG_SYS1_REG_166 — IREG 0xA4A6
+             *  bits[6:5] = gyro_src_ctrl
+             */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_GYRO_SRC_CTRL_H,
+                                    ICM45686_IREG_GYRO_SRC_CTRL_L);
+            reg_val  = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) |
+                       (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
+            ICM_WriteIReg(sensor,
+                          ICM45686_IREG_GYRO_SRC_CTRL_H,
+                          ICM45686_IREG_GYRO_SRC_CTRL_L,
+                          reg_val);
 
-            /* ШАГ 9: clk_src_sel = 1 — REG_MISC1 (0x39) User Bank 0, это ПРЯМОЙ */
-            ICM_WriteReg(sensor, ICM45686_REG_REG_MISC1, ICM45686_CLK_SRC_EXTERNAL);
-
-            /* ШАГ 10: rtc_mode = 1 — RTC_CONFIG (0x26) User Bank 0, это ПРЯМОЙ */
+            /* ШАГ 9: rtc_mode = 1 — включение внешнего CLKIN
+             *  RTC_CONFIG (0x26) — прямой User Bank 0
+             *  bit5 = rtc_mode
+             */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
             reg_val |= ICM45686_RTC_MODE_EN;
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
 
-            ICM_DelayMs(1U);
-
-            /* ШАГ 12: Поллинг PLL_RDY (INT1_STATUS1 bit0), таймаут 20 мс */
-            timeout = ICM45686_PLL_TIMEOUT_MS;
-            status  = 0U;
-
-            do
-            {
-                ICM_DelayMs(1U);
-                status = ICM_ReadReg(sensor, ICM45686_REG_INT1_STATUS1);
-                if ((status & ICM45686_INT1_STATUS_PLL_RDY) != 0U)
-                {
-                    break;
-                }
-                if (timeout > 0U) { timeout--; }
-            }
-            while (timeout != 0U);
-
-            if ((status & ICM45686_INT1_STATUS_PLL_RDY) != 0U)
-            {
-                g_clk_ok_mask   |= (1UL << sensor->sensor_id);
-            }
-            else
-            {
-                g_clk_fail_mask |= (1UL << sensor->sensor_id);
-            }
-
-            /* ШАГ 13: FSR и ODR */
+            /* ШАГ 10: ODR 6400 Гц + FSR */
             ICM_WriteReg(sensor,
                          ICM45686_REG_ACCEL_CONFIG0,
                          ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
@@ -465,7 +435,7 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_GYRO_CONFIG0,
                          ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE);
 
-            /* ШАГ 14: Конфигурация FIFO */
+            /* ШАГ 11: FIFO */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG0,
                          ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
@@ -482,12 +452,12 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG4,
                          ICM45686_FIFO_TMST_FSYNC_EN);
 
-            /* Сначала включаем без FIFO_IF_EN */
+            /* Сначала без IF_EN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN);
 
-            /* Затем включаем интерфейс FIFO */
+            /* Затем с IF_EN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN |
@@ -498,12 +468,12 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG2,
                          ICM45686_FIFO_FLUSH);
 
-            /* ШАГ 15: PWR_MGMT0: Gyro LN + Accel LN */
+            /* ШАГ 12: PWR_MGMT0 */
             ICM_WriteReg(sensor,
                          ICM45686_REG_PWR_MGMT0,
                          ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
 
-            /* ШАГ 16: Startup delay */
+            /* ШАГ 13: Startup delay */
             ICM_DelayMs(ICM45686_STARTUP_DELAY_MS);
         }
     }
@@ -638,7 +608,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
 }
 
 /* ===========================================================================
- *  ICM_NextSensor (static) — вызывается из DMA TC ISR
+ *  ICM_NextSensor (static)
  * ========================================================================== */
 static void ICM_NextSensor(ICM_Bus_t *bus)
 {
@@ -756,29 +726,29 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
 {
     if (bus == &g_bus_spi1)
     {
-        LL_DMA_ClearFlag_TC2(DMA1);  LL_DMA_ClearFlag_HT2(DMA1);
-        LL_DMA_ClearFlag_TE2(DMA1);  LL_DMA_ClearFlag_DME2(DMA1);
+        LL_DMA_ClearFlag_TC2(DMA1); LL_DMA_ClearFlag_HT2(DMA1);
+        LL_DMA_ClearFlag_TE2(DMA1); LL_DMA_ClearFlag_DME2(DMA1);
         LL_DMA_ClearFlag_FE2(DMA1);
-        LL_DMA_ClearFlag_TC3(DMA1);  LL_DMA_ClearFlag_HT3(DMA1);
-        LL_DMA_ClearFlag_TE3(DMA1);  LL_DMA_ClearFlag_DME3(DMA1);
+        LL_DMA_ClearFlag_TC3(DMA1); LL_DMA_ClearFlag_HT3(DMA1);
+        LL_DMA_ClearFlag_TE3(DMA1); LL_DMA_ClearFlag_DME3(DMA1);
         LL_DMA_ClearFlag_FE3(DMA1);
     }
     else if (bus == &g_bus_spi5)
     {
-        LL_DMA_ClearFlag_TC2(DMA2);  LL_DMA_ClearFlag_HT2(DMA2);
-        LL_DMA_ClearFlag_TE2(DMA2);  LL_DMA_ClearFlag_DME2(DMA2);
+        LL_DMA_ClearFlag_TC2(DMA2); LL_DMA_ClearFlag_HT2(DMA2);
+        LL_DMA_ClearFlag_TE2(DMA2); LL_DMA_ClearFlag_DME2(DMA2);
         LL_DMA_ClearFlag_FE2(DMA2);
-        LL_DMA_ClearFlag_TC3(DMA2);  LL_DMA_ClearFlag_HT3(DMA2);
-        LL_DMA_ClearFlag_TE3(DMA2);  LL_DMA_ClearFlag_DME3(DMA2);
+        LL_DMA_ClearFlag_TC3(DMA2); LL_DMA_ClearFlag_HT3(DMA2);
+        LL_DMA_ClearFlag_TE3(DMA2); LL_DMA_ClearFlag_DME3(DMA2);
         LL_DMA_ClearFlag_FE3(DMA2);
     }
     else
     {
-        LL_DMA_ClearFlag_TC0(DMA2);  LL_DMA_ClearFlag_HT0(DMA2);
-        LL_DMA_ClearFlag_TE0(DMA2);  LL_DMA_ClearFlag_DME0(DMA2);
+        LL_DMA_ClearFlag_TC0(DMA2); LL_DMA_ClearFlag_HT0(DMA2);
+        LL_DMA_ClearFlag_TE0(DMA2); LL_DMA_ClearFlag_DME0(DMA2);
         LL_DMA_ClearFlag_FE0(DMA2);
-        LL_DMA_ClearFlag_TC1(DMA2);  LL_DMA_ClearFlag_HT1(DMA2);
-        LL_DMA_ClearFlag_TE1(DMA2);  LL_DMA_ClearFlag_DME1(DMA2);
+        LL_DMA_ClearFlag_TC1(DMA2); LL_DMA_ClearFlag_HT1(DMA2);
+        LL_DMA_ClearFlag_TE1(DMA2); LL_DMA_ClearFlag_DME1(DMA2);
         LL_DMA_ClearFlag_FE1(DMA2);
     }
 }
