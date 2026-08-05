@@ -18,8 +18,8 @@
  *          11    Gyro Z MSB
  *          12    Gyro Z LSB
  *          13    Temperature
- *          14    Timestamp LSB
- *          15    Timestamp MSB
+ *          14    Timestamp LSB      ⚠ — в коде указано LSB, но даташит говорит H (MSB)!
+ *          15    Timestamp MSB      ⚠
  *
  *          Первые 2 байта RX-буфера DMA — служебные (адрес+dummy),
  *          поэтому данные начинаются с offset +1 от начала g_fifo_data[b][s].
@@ -81,8 +81,7 @@ void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
                 /* Температура */
                 smp->temp = (int8_t)pkt[13];
 
-                /* Временная метка (little-endian в FIFO) */
-                smp->timestamp = (uint16_t)(pkt[14] | ((uint16_t)pkt[15] << 8U));
+                smp->timestamp = (uint16_t)(((uint16_t)pkt[14] << 8U) | (uint16_t)pkt[15]);
 
                 pkt_cnt++;
             }
@@ -123,8 +122,7 @@ void ICM_ParseAllFIFO(void)
 
             if ((fault_mask & (1UL << sensor_id)) != 0U)
             {
-                /* Датчик неисправен — заполнить нулями, count = 0.
-                 * ПК видит нулевые данные и count==0 как признак fault. */
+                /* Датчик неисправен — заполнить нулями, count = 0. */
                 memset(g_sensor_batches[sensor_id].samples, 0x00,
                        sizeof(g_sensor_batches[sensor_id].samples));
                 g_sensor_batches[sensor_id].count = 0U;

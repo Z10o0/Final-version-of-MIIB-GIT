@@ -1,2 +1,2 @@
 ../Core/Src/icm45686_data.c:47:6:ICM_ParseFIFOBuffer	40	static
-../Core/Src/icm45686_data.c:107:6:ICM_ParseAllFIFO	24	static
+../Core/Src/icm45686_data.c:106:6:ICM_ParseAllFIFO	24	static
