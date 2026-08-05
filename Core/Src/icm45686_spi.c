@@ -13,7 +13,8 @@
  *  9б. 0x26[bit6|bit5]=1       — rtc_align + rtc_mode
  * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0
  * 11.  PWR_MGMT0: Gyro LN + Accel LN  ← ДО FIFO
- * 12.  FIFO (watermark, config3, config4, flush)
+ * 12.  FIFO: flush → config0 → watermark → config4(TMST) → config3 → IF_EN
+ *      [FIX] Порядок изменён: FLUSH первый, FIFO_CONFIG4 ДО IF_EN
  * 13.  Startup delay 200 мс
  * =============================================================================
  */
@@ -23,9 +24,7 @@
 
 /* ШАГ 3: INT1_STATUS0 (0x19), bit7 = reset_done_int */
 #define ICM45686_INT1_STATUS0_RESET_DONE    (1U << 7)
-/* ШАГ 9а: SMC_CONTROL_0 bit4 = accel_lp_clk_sel — переключает тактирование
- * акселерометра на внешний CLKIN. Без этого бита при rtc_mode=1 timestamp
- * тикает от CLKIN, а акселерометр — от внутреннего RC → рассинхрон → 0x0000 */
+/* ШАГ 9а: SMC_CONTROL_0 bit4 = accel_lp_clk_sel */
 #define ICM45686_ACCEL_LP_CLK_SEL           (1U << 4)
 
 static void    ICM_DelayUs            (uint32_t us);
@@ -293,12 +292,7 @@ uint32_t ICM_InitAllSensors(void)
             /* ШАГ 2: Soft Reset */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
 
-            /* ШАГ 3: Ждём RESET_DONE (INT1_STATUS0 bit7), таймаут 10 мс.
-             *
-             * ArduPilot/Betaflight используют именно этот флаг.
-             * WHO_AM_I может ответить раньше полного завершения сброса,
-             * из-за чего последующие IREG-записи (в т.ч. tmst_en) теряются.
-             */
+            /* ШАГ 3: Ждём RESET_DONE */
             timeout = 1000U;
             do {
                 ICM_DelayUs(10U);
@@ -326,61 +320,29 @@ uint32_t ICM_InitAllSensors(void)
             ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD, reg_val);
 
             /* ШАГ 6: I3C STC off */
-            reg_val  = ICM_ReadIReg(sensor,
-                                    ICM45686_IREG_I3C_STC_CFG_H,
-                                    ICM45686_IREG_I3C_STC_CFG_L);
+            reg_val  = ICM_ReadIReg(sensor, ICM45686_IREG_I3C_STC_CFG_H, ICM45686_IREG_I3C_STC_CFG_L);
             reg_val &= ~ICM45686_I3C_STC_MODE_BIT;
-            ICM_WriteIReg(sensor,
-                          ICM45686_IREG_I3C_STC_CFG_H,
-                          ICM45686_IREG_I3C_STC_CFG_L,
-                          reg_val);
+            ICM_WriteIReg(sensor, ICM45686_IREG_I3C_STC_CFG_H, ICM45686_IREG_I3C_STC_CFG_L, reg_val);
 
             /* ШАГ 7: accel_src_ctrl = FIR+interp */
-            reg_val  = ICM_ReadIReg(sensor,
-                                    ICM45686_IREG_ACCEL_SRC_CTRL_H,
-                                    ICM45686_IREG_ACCEL_SRC_CTRL_L);
+            reg_val  = ICM_ReadIReg(sensor, ICM45686_IREG_ACCEL_SRC_CTRL_H, ICM45686_IREG_ACCEL_SRC_CTRL_L);
             reg_val  = (reg_val & ~0x03U) | ICM45686_ACCEL_SRC_FIR_INTERP;
-            ICM_WriteIReg(sensor,
-                          ICM45686_IREG_ACCEL_SRC_CTRL_H,
-                          ICM45686_IREG_ACCEL_SRC_CTRL_L,
-                          reg_val);
+            ICM_WriteIReg(sensor, ICM45686_IREG_ACCEL_SRC_CTRL_H, ICM45686_IREG_ACCEL_SRC_CTRL_L, reg_val);
 
             /* ШАГ 8: gyro_src_ctrl = FIR+interp */
-            reg_val  = ICM_ReadIReg(sensor,
-                                    ICM45686_IREG_GYRO_SRC_CTRL_H,
-                                    ICM45686_IREG_GYRO_SRC_CTRL_L);
-            reg_val  = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) |
-                       (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
-            ICM_WriteIReg(sensor,
-                          ICM45686_IREG_GYRO_SRC_CTRL_H,
-                          ICM45686_IREG_GYRO_SRC_CTRL_L,
-                          reg_val);
+            reg_val  = ICM_ReadIReg(sensor, ICM45686_IREG_GYRO_SRC_CTRL_H, ICM45686_IREG_GYRO_SRC_CTRL_L);
+            reg_val  = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) | (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
+            ICM_WriteIReg(sensor, ICM45686_IREG_GYRO_SRC_CTRL_H, ICM45686_IREG_GYRO_SRC_CTRL_L, reg_val);
 
-            /* ШАГ 9а: IREG 0xA258 — tmst_en (bit0) + ACCEL_LP_CLK_SEL (bit4)
-             *
-             * ACCEL_LP_CLK_SEL (bit4) КРИТИЧЕН при CLKIN!
-             * Без него акселерометр тактируется от внутреннего RC-генератора,
-             * а timestamp-счётчик — от CLKIN. Из-за рассинхрона датчик
-             * не может корректно проставить поле timestamp в FIFO-пакет
-             * и заполняет его нулями (0x0000), даже если TMST_FIELD_EN=1
-             * в заголовке пакета.
-             * Источник: ArduPilot/AP_InertialSensor_Invensensev3.cpp [web:48]
-             */
-            reg_val  = ICM_ReadIReg(sensor,
-                                    ICM45686_IREG_SMC_CONTROL_0_H,
-                                    ICM45686_IREG_SMC_CONTROL_0_L);
+            /* ШАГ 9а: SMC_CONTROL_0 (tmst_en + accel_lp_clk_sel) */
+            reg_val  = ICM_ReadIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H, ICM45686_IREG_SMC_CONTROL_0_L);
             reg_val |= ICM45686_TMST_EN | ICM45686_ACCEL_LP_CLK_SEL;
-            ICM_WriteIReg(sensor,
-                          ICM45686_IREG_SMC_CONTROL_0_H,
-                          ICM45686_IREG_SMC_CONTROL_0_L,
-                          reg_val);
+            ICM_WriteIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H, ICM45686_IREG_SMC_CONTROL_0_L, reg_val);
 
-            /* ШАГ 9б: rtc_align (bit6) + rtc_mode (bit5)
-             *
-             * rtc_align выдаёт однократный выравнивающий импульс для
-             * синхронизации счётчика с фронтом CLKIN. Самосбрасывается.
-             * Порядок: сначала align+mode вместе, потом проверяем mode.
-             */
+            /* Даем время медленному домену RTC защелкнуть биты без проверок readback */
+            ICM_DelayUs(500U);
+
+            /* ШАГ 9б: rtc_align + rtc_mode */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
             reg_val |= ICM45686_RTC_ALIGN_EN | ICM45686_RTC_MODE_EN;
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
@@ -392,58 +354,26 @@ uint32_t ICM_InitAllSensors(void)
                 g_clk_fail_mask |= (1UL << sensor->sensor_id);
 
             /* ШАГ 10: ODR + FSR */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_ACCEL_CONFIG0,
-                         ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
+            ICM_WriteReg(sensor, ICM45686_REG_ACCEL_CONFIG0, ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
+            ICM_WriteReg(sensor, ICM45686_REG_GYRO_CONFIG0, ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE);
 
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_GYRO_CONFIG0,
-                         ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE);
-
-            /* ШАГ 11: PWR_MGMT0 — ДО FIFO!
-             *
-             * Питание датчика должно быть включено до запуска FIFO,
-             * иначе первые пакеты могут быть невалидными.
-             * Порядок как в ArduPilot: pwr → fifo_config → flush.
-             */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_PWR_MGMT0,
-                         ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
-
-            /* Задержка после включения питания перед конфигурацией FIFO */
+            /* ШАГ 11: PWR_MGMT0 — включаем измерительные ядра ТОЛЬКО ПОСЛЕ IREG! */
+            ICM_WriteReg(sensor, ICM45686_REG_PWR_MGMT0, ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
             ICM_DelayMs(5U);
 
-            /* ШАГ 12: FIFO */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG0,
-                         ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
+            /* ШАГ 12: Инициализация FIFO (в исправленном порядке для Timestamp) */
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG2, ICM45686_FIFO_FLUSH);
+            ICM_DelayUs(100U);
 
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG1_0,
-                         (uint8_t)(ICM_FIFO_WATERMARK_PACKETS & 0x00FFU));
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG0, ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_0, (uint8_t)(ICM_FIFO_WATERMARK_PACKETS & 0x00FFU));
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_1, (uint8_t)((ICM_FIFO_WATERMARK_PACKETS >> 8U) & 0x00FFU));
 
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG1_1,
-                         (uint8_t)((ICM_FIFO_WATERMARK_PACKETS >> 8U) & 0x00FFU));
+            /* ВАЖНО: TMST_FSYNC_EN пишем СТРОГО ДО IF_EN (это включает метку времени) */
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG4, ICM45686_FIFO_TMST_FSYNC_EN);
 
-            /* Сначала без IF_EN */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG3,
-                         ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN);
-
-            /* Потом с IF_EN */
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG3,
-                         ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN |
-                         ICM45686_FIFO_IF_EN);
-
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG4,
-                         ICM45686_FIFO_TMST_FSYNC_EN);
-
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG2,
-                         ICM45686_FIFO_FLUSH);
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG3, ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN);
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG3, ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN | ICM45686_FIFO_IF_EN);
 
             /* ШАГ 13: Startup delay */
             ICM_DelayMs(ICM45686_STARTUP_DELAY_MS);
@@ -452,7 +382,6 @@ uint32_t ICM_InitAllSensors(void)
 
     return g_sensor_fault_mask;
 }
-
 void ICM_StartBurstRead(void)
 {
     uint8_t first1, first5, first4;
