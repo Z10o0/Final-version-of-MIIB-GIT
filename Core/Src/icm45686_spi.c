@@ -1,35 +1,26 @@
 /* =============================================================================
  * icm45686_spi.c — ПАРАЛЛЕЛЬНАЯ версия, все 3 шины SPI работают одновременно
  *
- * Последовательность инициализации CLKIN по inv_imu_regmap_le.h:
- *
  *  1.  WHO_AM_I
  *  2.  Soft Reset (REG_MISC2 bit1), задержка 2 мс
  *  3.  WHO_AM_I после сброса
- *  4.  0x30[bit1]=1, [bit0]=0  — AUX1 off (aux1_enable_ovrd=1, val=0)
+ *  4.  0x30[bit1]=1, [bit0]=0  — AUX1 off
  *  5.  0x31[bit2]=1, [1:0]=10b — INT2 → CLKIN
  *  6.  IREG 0xA268[bit2]=0     — I3C STC mode off
  *  7.  IREG 0xA57B[1:0]=0b10   — accel_src_ctrl = FIR+interp
  *  8.  IREG 0xA4A6[6:5]=0b10   — gyro_src_ctrl  = FIR+interp
  *  9.  0x26[bit5]=1            — rtc_mode = 1 (включение CLKIN)
+ *  9b. IREG 0xA258[bit0]=1     — tmst_en = 1 (ЗАПУСК счётчика timestamp)
  * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400 Гц, FSR)
  * 11.  FIFO (watermark, config3, config4, flush)
  * 12.  PWR_MGMT0: Gyro LN + Accel LN
  * 13.  Startup delay 200 мс
- *
- * Шины и DMA:
- *   SPI1  RX→DMA1/Stream2  TX→DMA1/Stream3  датчики 0..5
- *   SPI5  RX→DMA2/Stream2  TX→DMA2/Stream3  датчики 6..11
- *   SPI4  RX→DMA2/Stream0  TX→DMA2/Stream1  датчики 12..17
  * =============================================================================
  */
 
 #include "icm45686_spi.h"
 #include <string.h>
 
-/* ===========================================================================
- *  Прототипы локальных функций
- * ========================================================================== */
 static void    ICM_DelayUs            (uint32_t us);
 static void    ICM_DelayMs            (uint32_t ms);
 static void    ICM_CS_Low             (const ICM_Sensor_t *s);
@@ -48,9 +39,6 @@ static void    ICM_FinishBus          (ICM_Bus_t *bus);
 static void    ICM_TryCompleteBatch   (void);
 static void    ICM_MarkFault          (ICM_Sensor_t *s);
 
-/* ===========================================================================
- *  DMA-буферы в D2 SRAM (Not Cacheable по MPU Region)
- * ========================================================================== */
 uint8_t g_fifo_data[ICM_SPI_BUS_COUNT][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE]
     __attribute__((section(".RAM_D2"), aligned(32)));
 
@@ -61,28 +49,14 @@ static uint8_t g_tx_spi5[ICM_FIFO_DMA_BUF_SIZE]
 static uint8_t g_tx_spi4[ICM_FIFO_DMA_BUF_SIZE]
     __attribute__((section(".RAM_D2"), aligned(32)));
 
-/* ===========================================================================
- *  Глобальные флаги
- * ========================================================================== */
 volatile uint8_t  g_fifo_batch_ready  = 0U;
 volatile uint8_t  g_dma_cycle_active  = 0U;
 volatile uint32_t g_sensor_fault_mask = 0U;
 volatile uint32_t g_dma_error_mask    = 0U;
 volatile uint32_t g_tim6_skip_count   = 0U;
+volatile uint32_t g_clk_ok_mask       = 0U;
+volatile uint32_t g_clk_fail_mask     = 0U;
 
-/*
- * Диагностика внешнего тактирования (CLKIN).
- * Заполняются в ICM_InitAllSensors():
- *   g_clk_ok_mask   — бит=1 если датчик успешно захватил CLKIN (rtc_mode=1 подтверждён)
- *   g_clk_fail_mask — бит=1 если захват не удался (rtc_mode не установился)
- * Ожидаемое состояние после инициализации: ok=0x0003FFFF, fail=0x00000000
- */
-volatile uint32_t g_clk_ok_mask   = 0U;
-volatile uint32_t g_clk_fail_mask = 0U;
-
-/* ===========================================================================
- *  Таблица шин
- * ========================================================================== */
 ICM_Bus_t g_bus_spi1 =
 {
     .spi           = SPI1,
@@ -140,9 +114,6 @@ ICM_Bus_t g_bus_spi4 =
     }
 };
 
-/* ===========================================================================
- *  ICM_BusesInit
- * ========================================================================== */
 void ICM_BusesInit(void)
 {
     uint8_t i;
@@ -189,9 +160,6 @@ void ICM_BusesInit(void)
     g_clk_fail_mask     = 0U;
 }
 
-/* ===========================================================================
- *  ICM_WriteReg — блокирующая запись одного регистра User Bank 0
- * ========================================================================== */
 void ICM_WriteReg(ICM_Sensor_t *sensor, uint8_t reg, uint8_t value)
 {
     SPI_TypeDef *spi = sensor->spi;
@@ -219,9 +187,6 @@ void ICM_WriteReg(ICM_Sensor_t *sensor, uint8_t reg, uint8_t value)
     while (LL_SPI_IsEnabled(spi) != 0U) {}
 }
 
-/* ===========================================================================
- *  ICM_ReadReg — блокирующее чтение одного регистра User Bank 0
- * ========================================================================== */
 uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
 {
     SPI_TypeDef *spi = sensor->spi;
@@ -259,9 +224,6 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
     return result;
 }
 
-/* ===========================================================================
- *  ICM_WaitIRegDone
- * ========================================================================== */
 static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
 {
     uint32_t timeout = 500U;
@@ -284,9 +246,6 @@ static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
     return 0U;
 }
 
-/* ===========================================================================
- *  ICM_WriteIReg — запись в Internal Register
- * ========================================================================== */
 void ICM_WriteIReg(ICM_Sensor_t *sensor,
                    uint8_t       addr_h,
                    uint8_t       addr_l,
@@ -299,9 +258,6 @@ void ICM_WriteIReg(ICM_Sensor_t *sensor,
     ICM_WaitIRegDone(sensor);
 }
 
-/* ===========================================================================
- *  ICM_ReadIReg — чтение из Internal Register
- * ========================================================================== */
 uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
                      uint8_t       addr_h,
                      uint8_t       addr_l)
@@ -312,24 +268,6 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
     return ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
 }
 
-/* ===========================================================================
- *  ICM_InitAllSensors
- *
- *  Шаги (сверены с inv_imu_regmap_le.h):
- *   1.  WHO_AM_I = 0xE9
- *   2.  Soft Reset, задержка 2 мс
- *   3.  WHO_AM_I после сброса
- *   4.  0x30: AUX1 off  (bit1=aux1_enable_ovrd=1, bit0=aux1_enable_ovrd_val=0)
- *   5.  0x31: INT2→CLKIN (bit2=pads_int2_cfg_ovrd=1, bits[1:0]=0b10)
- *   6.  IREG 0xA268: I3C STC off (bit2=i3c_stc_mode=0)
- *   7.  IREG 0xA57B: accel_src_ctrl=0b10 (bits[1:0])
- *   8.  IREG 0xA4A6: gyro_src_ctrl=0b10  (bits[6:5])
- *   9.  0x26: rtc_mode=1 (bit5) — включение CLKIN
- *  10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400, FSR)
- *  11.  FIFO (config0, watermark, config3, config4, flush)
- *  12.  PWR_MGMT0: Gyro LN + Accel LN
- *  13.  Startup delay 200 мс
- * ========================================================================== */
 uint32_t ICM_InitAllSensors(void)
 {
     ICM_Bus_t * const buses[ICM_SPI_BUS_COUNT] =
@@ -354,48 +292,37 @@ uint32_t ICM_InitAllSensors(void)
         {
             ICM_Sensor_t *sensor = &buses[bus_idx]->sensors[sensor_idx];
 
-            /* ШАГ 1: WHO_AM_I */
+            /* ШАГ 1 */
             if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE)
             {
                 ICM_MarkFault(sensor);
                 continue;
             }
 
-            /* ШАГ 2: Soft Reset */
+            /* ШАГ 2 */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
             ICM_DelayUs(ICM45686_RESET_DELAY_US);
 
-            /* ШАГ 3: WHO_AM_I после сброса */
+            /* ШАГ 3 */
             if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE)
             {
                 ICM_MarkFault(sensor);
                 continue;
             }
 
-            /* ШАГ 4: AUX1 off
-             *  IOC_PAD_SCENARIO_AUX_OVRD (0x30) — прямой User Bank 0
-             *  bit1 = aux1_enable_ovrd = 1
-             *  bit0 = aux1_enable_ovrd_val = 0
-             */
+            /* ШАГ 4: AUX1 off */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD);
-            reg_val |=  ICM45686_AUX1_ENABLE_OVRD;      /* bit1 = 1 */
-            reg_val &= ~ICM45686_AUX1_ENABLE_OVRD_VAL;  /* bit0 = 0 */
+            reg_val |=  ICM45686_AUX1_ENABLE_OVRD;
+            reg_val &= ~ICM45686_AUX1_ENABLE_OVRD_VAL;
             ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD, reg_val);
 
-            /* ШАГ 5: INT2 → CLKIN
-             *  IOC_PAD_SCENARIO_OVRD (0x31) — прямой User Bank 0
-             *  bit2 = pads_int2_cfg_ovrd = 1
-             *  bits[1:0] = pads_int2_cfg_ovrd_val = 0b10 (CLKIN)
-             */
+            /* ШАГ 5: INT2 → CLKIN */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD);
-            reg_val |=  ICM45686_INT2_CFG_OVRD_EN;               /* bit2 = 1 */
-            reg_val  = (reg_val & ~0x03U) | ICM45686_INT2_CFG_CLKIN_VAL; /* [1:0]=0b10 */
+            reg_val |=  ICM45686_INT2_CFG_OVRD_EN;
+            reg_val  = (reg_val & ~0x03U) | ICM45686_INT2_CFG_CLKIN_VAL;
             ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD, reg_val);
 
-            /* ШАГ 6: I3C STC mode off
-             *  SIFS_I3C_STC_CFG — IREG 0xA268
-             *  bit2 = i3c_stc_mode = 0
-             */
+            /* ШАГ 6: I3C STC off */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_I3C_STC_CFG_H,
                                     ICM45686_IREG_I3C_STC_CFG_L);
@@ -405,10 +332,7 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_I3C_STC_CFG_L,
                           reg_val);
 
-            /* ШАГ 7: accel_src_ctrl = 0b10 (FIR+interp)
-             *  IPREG_SYS2_REG_123 — IREG 0xA57B
-             *  bits[1:0] = accel_src_ctrl
-             */
+            /* ШАГ 7: accel_src_ctrl = FIR+interp */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_ACCEL_SRC_CTRL_H,
                                     ICM45686_IREG_ACCEL_SRC_CTRL_L);
@@ -418,10 +342,7 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_ACCEL_SRC_CTRL_L,
                           reg_val);
 
-            /* ШАГ 8: gyro_src_ctrl = 0b10 (FIR+interp)
-             *  IPREG_SYS1_REG_166 — IREG 0xA4A6
-             *  bits[6:5] = gyro_src_ctrl
-             */
+            /* ШАГ 8: gyro_src_ctrl = FIR+interp */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_GYRO_SRC_CTRL_H,
                                     ICM45686_IREG_GYRO_SRC_CTRL_L);
@@ -432,26 +353,34 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_GYRO_SRC_CTRL_L,
                           reg_val);
 
-            /* ШАГ 9: rtc_mode = 1 — включение внешнего CLKIN
-             *  RTC_CONFIG (0x26) — прямой User Bank 0
-             *  bit5 = rtc_mode
-             */
+            /* ШАГ 9: rtc_mode = 1 */
             reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
             reg_val |= ICM45686_RTC_MODE_EN;
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
 
-            /* Верификация: читаем обратно — заполняем маски */
             reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
             if ((reg_val & ICM45686_RTC_MODE_EN) != 0U)
-            {
                 g_clk_ok_mask   |= (1UL << sensor->sensor_id);
-            }
             else
-            {
                 g_clk_fail_mask |= (1UL << sensor->sensor_id);
-            }
 
-            /* ШАГ 10: ODR 6400 Гц + FSR */
+            /* ШАГ 9б: ВКЛЮЧИТЬ TIMESTAMP-СЧЁТЧИК
+             *  SMC_CONTROL_0 — IREG 0xA258, bit0 = tmst_en = 1
+             *
+             *  FIFO_CONFIG4.fifo_tmst_fsync_en (0x22, bit1) только
+             *  разрешает класть timestamp в FIFO-пакет. БЕЗ ЭТОГО
+             *  БИТА сам счётчик не тикает → timestamp всегда 0x0000.
+             */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_SMC_CONTROL_0_H,
+                                    ICM45686_IREG_SMC_CONTROL_0_L);
+            reg_val |= ICM45686_TMST_EN;
+            ICM_WriteIReg(sensor,
+                          ICM45686_IREG_SMC_CONTROL_0_H,
+                          ICM45686_IREG_SMC_CONTROL_0_L,
+                          reg_val);
+
+            /* ШАГ 10: ODR + FSR */
             ICM_WriteReg(sensor,
                          ICM45686_REG_ACCEL_CONFIG0,
                          ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
@@ -465,9 +394,6 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG0,
                          ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
 
-            /* ✅ Watermark в ПАКЕТАХ (не байтах!).
-             *    ICM_FIFO_WATERMARK_PACKETS = 10
-             *    Было: ICM_FIFO_WATERMARK_BYTES = 160 → неверно */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG1_0,
                          (uint8_t)(ICM_FIFO_WATERMARK_PACKETS & 0x00FFU));
@@ -476,35 +402,29 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG1_1,
                          (uint8_t)((ICM_FIFO_WATERMARK_PACKETS >> 8U) & 0x00FFU));
 
-            /* ✅ Правильный порядок: сначала CONFIG3, потом CONFIG4 */
-
-            /* FIFO_CONFIG3: включить accel+gyro (без IF_EN пока) */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN);
 
-            /* FIFO_CONFIG3: теперь с IF_EN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN |
                          ICM45686_FIFO_IF_EN);
 
-            /* FIFO_CONFIG4: timestamp enable */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG4,
                          ICM45686_FIFO_TMST_FSYNC_EN);
 
-            /* Flush FIFO */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG2,
                          ICM45686_FIFO_FLUSH);
 
-            /* ШАГ 12: PWR_MGMT0 */
+            /* ШАГ 12 */
             ICM_WriteReg(sensor,
                          ICM45686_REG_PWR_MGMT0,
                          ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
 
-            /* ШАГ 13: Startup delay */
+            /* ШАГ 13 */
             ICM_DelayMs(ICM45686_STARTUP_DELAY_MS);
         }
     }
@@ -512,9 +432,6 @@ uint32_t ICM_InitAllSensors(void)
     return g_sensor_fault_mask;
 }
 
-/* ===========================================================================
- *  ICM_StartBurstRead — ПАРАЛЛЕЛЬНЫЙ старт всех трёх шин
- * ========================================================================== */
 void ICM_StartBurstRead(void)
 {
     uint8_t first1, first5, first4;
@@ -551,9 +468,6 @@ void ICM_StartBurstRead(void)
 
 void ICM_StartBurstRead_SPI1(void) { ICM_StartBurstRead(); }
 
-/* ===========================================================================
- *  ISR-обёртки DMA
- * ========================================================================== */
 void ICM_DMA_RxComplete_SPI1(void) { ICM_NextSensor(&g_bus_spi1); }
 void ICM_DMA_RxComplete_SPI5(void) { ICM_NextSensor(&g_bus_spi5); }
 void ICM_DMA_RxComplete_SPI4(void) { ICM_NextSensor(&g_bus_spi4); }
@@ -561,16 +475,10 @@ void ICM_DMA_Error_SPI1(void) { g_dma_error_mask |= (1UL << 0U); ICM_NextSensor(
 void ICM_DMA_Error_SPI5(void) { g_dma_error_mask |= (1UL << 1U); ICM_NextSensor(&g_bus_spi5); }
 void ICM_DMA_Error_SPI4(void) { g_dma_error_mask |= (1UL << 2U); ICM_NextSensor(&g_bus_spi4); }
 
-/* ===========================================================================
- *  ISR-обёртки SPI EOT
- * ========================================================================== */
 void ICM_SPI_Eot_SPI1(void) { ICM_OnSpiEot(&g_bus_spi1); }
 void ICM_SPI_Eot_SPI5(void) { ICM_OnSpiEot(&g_bus_spi5); }
 void ICM_SPI_Eot_SPI4(void) { ICM_OnSpiEot(&g_bus_spi4); }
 
-/* ===========================================================================
- *  ICM_StartBusRead (static)
- * ========================================================================== */
 static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
 {
     ICM_Sensor_t *sensor;
@@ -619,9 +527,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     ICM_SPI_EnsureDisabled(bus->spi);
 
     while (LL_SPI_IsActiveFlag_RXP(bus->spi) != 0U)
-    {
         (void)LL_SPI_ReceiveData8(bus->spi);
-    }
     WRITE_REG(bus->spi->IFCR, 0x0FF8U);
 
     LL_SPI_SetTransferSize(bus->spi, ICM_FIFO_DMA_BUF_SIZE);
@@ -638,9 +544,6 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     LL_SPI_StartMasterTransfer(bus->spi);
 }
 
-/* ===========================================================================
- *  ICM_NextSensor (static)
- * ========================================================================== */
 static void ICM_NextSensor(ICM_Bus_t *bus)
 {
     LL_SPI_DisableDMAReq_RX(bus->spi);
@@ -651,14 +554,9 @@ static void ICM_NextSensor(ICM_Bus_t *bus)
     LL_SPI_EnableIT_EOT(bus->spi);
 
     if (LL_SPI_IsActiveFlag_EOT(bus->spi) != 0U)
-    {
         ICM_OnSpiEot(bus);
-    }
 }
 
-/* ===========================================================================
- *  ICM_OnSpiEot (static)
- * ========================================================================== */
 static void ICM_OnSpiEot(ICM_Bus_t *bus)
 {
     uint8_t prev_idx;
@@ -688,18 +586,11 @@ static void ICM_OnSpiEot(ICM_Bus_t *bus)
 
     next_idx = ICM_FindNextHealthy(bus, (uint8_t)(prev_idx + 1U));
     if (next_idx < ICM_SENSORS_PER_BUS)
-    {
         ICM_StartBusRead(bus, next_idx);
-    }
     else
-    {
         ICM_FinishBus(bus);
-    }
 }
 
-/* ===========================================================================
- *  ICM_FinishBus / ICM_TryCompleteBatch
- * ========================================================================== */
 static void ICM_FinishBus(ICM_Bus_t *bus)
 {
     bus->transfer_complete = 1U;
@@ -717,9 +608,6 @@ static void ICM_TryCompleteBatch(void)
     }
 }
 
-/* ===========================================================================
- *  Вспомогательные функции
- * ========================================================================== */
 static void ICM_MarkFault(ICM_Sensor_t *s)
 {
     s->fault = 1U;
