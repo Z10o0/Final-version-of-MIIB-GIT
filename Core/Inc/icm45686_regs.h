@@ -178,8 +178,21 @@ extern "C" {
 #define ICM45686_FIFO_ACCEL_EN              (1U << 1)
 #define ICM45686_FIFO_GYRO_EN               (1U << 2)
 #define ICM45686_FIFO_HIRES_EN              (1U << 3)
-#define ICM45686_FIFO_HEADER_ACCEL_BIT      (1U << 7)
-#define ICM45686_FIFO_HEADER_GYRO_BIT       (1U << 6)
+
+/* ============================================================================
+ *  FIFO Header bits (16-bit packet format)
+ *  Сверено с даташитом ICM-45686, Table «FIFO Packet Header»:
+ *
+ *   bit7 = MSG   — пустой пакет-заглушка (message token), данных нет
+ *   bit6 = ACCEL — данные акселерометра в пакете валидны
+ *   bit5 = GYRO  — данные гироскопа в пакете валидны
+ *
+ *  ❌ БЫЛО (неверно):  ACCEL=(1U<<7), GYRO=(1U<<6)
+ *  ✅ ИСПРАВЛЕНО:      ACCEL=(1U<<6), GYRO=(1U<<5)
+ * ========================================================================== */
+#define ICM45686_FIFO_HEADER_MSG_BIT        (1U << 7)  /* пустой пакет         */
+#define ICM45686_FIFO_HEADER_ACCEL_BIT      (1U << 6)  /* accel data valid     */
+#define ICM45686_FIFO_HEADER_GYRO_BIT       (1U << 5)  /* gyro  data valid     */
 
 /* ============================================================================
  *  FIFO_CONFIG4 (0x22)
@@ -188,7 +201,17 @@ extern "C" {
 #define ICM45686_FIFO_TMST_FSYNC_EN         (1U << 1)
 
 /* ============================================================================
- *  FIFO пакет
+ *  FIFO пакет (16-bit режим, big-endian)
+ *  byte  0     = Header
+ *  bytes 1-2   = Accel X  (H, L)
+ *  bytes 3-4   = Accel Y  (H, L)
+ *  bytes 5-6   = Accel Z  (H, L)
+ *  bytes 7-8   = Gyro  X  (H, L)
+ *  bytes 9-10  = Gyro  Y  (H, L)
+ *  bytes 11-12 = Gyro  Z  (H, L)
+ *  byte  13    = Temp
+ *  byte  14    = Timestamp H (MSB)  ← big-endian!
+ *  byte  15    = Timestamp L (LSB)
  * ========================================================================== */
 #define ICM45686_FIFO_PACKET_SIZE_16BIT     16U
 #define ICM45686_FIFO_PACKET_SIZE_HIRES     20U

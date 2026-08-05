@@ -44,13 +44,12 @@ ICM_SensorBatch_t g_sensor_batches[ICM_TOTAL_SENSORS];
 /* ================================================================
  * ICM_ParseFIFOBuffer — разбор буфера одного ИСПРАВНОГО датчика
  * ================================================================ */
-void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
-                         uint16_t       buf_len,
+void ICM_ParseFIFOBuffer(const uint8_t *raw_buf, uint16_t buf_len,
                          ICM_SensorBatch_t *batch)
 {
-    uint16_t offset  = 0U;
-    uint8_t  pkt_cnt = 0U;
-    uint8_t  header;
+    uint16_t       offset  = 0U;
+    uint8_t        pkt_cnt = 0U;
+    uint8_t        header;
     const uint8_t *pkt;
 
     batch->count = 0U;
@@ -60,9 +59,16 @@ void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
         pkt    = &raw_buf[offset];
         header = pkt[0];
 
-        /* Проверка валидности: хотя бы гироскоп или акселерометр */
-        if (((header & ICM45686_FIFO_HEADER_ACCEL_BIT) != 0U) ||
-            ((header & ICM45686_FIFO_HEADER_GYRO_BIT)  != 0U))
+        /*
+         * FIFO Header (16-bit packet format):
+         *   bit7 = MSG   (message/empty token — пропустить!)
+         *   bit6 = ACCEL (данные акселерометра валидны)
+         *   bit5 = GYRO  (данные гироскопа валидны)
+         *
+         * ✅ ИСПРАВЛЕНО: было (1U<<7)=ACCEL и (1U<<6)=GYRO — неверно!
+         */
+        if (((header & (1U << 6)) != 0U) ||   /* ACCEL valid */
+            ((header & (1U << 5)) != 0U))      /* GYRO  valid */
         {
             if (pkt_cnt < ICM_FIFO_POLL_PACKETS)
             {
@@ -81,12 +87,13 @@ void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
                 /* Температура */
                 smp->temp = (int8_t)pkt[13];
 
+                /* Временная метка: big-endian, byte14=H, byte15=L */
                 smp->timestamp = (uint16_t)(((uint16_t)pkt[14] << 8U) | (uint16_t)pkt[15]);
 
                 pkt_cnt++;
             }
         }
-        /* Header == 0x80 — пустой пакет-заглушка, пропускаем */
+        /* Header == 0x80 — MSG пакет-заглушка, пропускаем */
 
         offset += (uint16_t)ICM45686_FIFO_PACKET_SIZE_16BIT;
     }
