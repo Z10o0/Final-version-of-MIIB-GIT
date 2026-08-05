@@ -9,8 +9,8 @@
  *  6.  IREG 0xA268[bit2]=0     — I3C STC mode off
  *  7.  IREG 0xA57B[1:0]=0b10   — accel_src_ctrl = FIR+interp
  *  8.  IREG 0xA4A6[6:5]=0b10   — gyro_src_ctrl  = FIR+interp
- *  9.  0x26[bit5]=1            — rtc_mode = 1 (включение CLKIN)
- *  9b. IREG 0xA258[bit0]=1     — tmst_en = 1 (ЗАПУСК счётчика timestamp)
+ *  9а. IREG 0xA258[bit0]=1     — tmst_en = 1  ← СНАЧАЛА счётчик
+ *  9б. 0x26[bit5]=1            — rtc_mode = 1 ← ПОТОМ CLKIN
  * 10.  ACCEL_CONFIG0 + GYRO_CONFIG0 (ODR 6400 Гц, FSR)
  * 11.  FIFO (watermark, config3, config4, flush)
  * 12.  PWR_MGMT0: Gyro LN + Accel LN
@@ -31,7 +31,7 @@ static void    ICM_SPI_DrainRx        (SPI_TypeDef *spi, uint32_t n);
 static uint8_t ICM_BusIndex           (const ICM_Bus_t *bus);
 static uint8_t ICM_FindNextHealthy    (const ICM_Bus_t *bus, uint8_t from);
 static void    ICM_ClearDmaFlags      (const ICM_Bus_t *bus);
-static uint8_t ICM_WaitIRegDone       (ICM_Sensor_t *sensor);
+static void    ICM_WaitIRegReady      (void);          /* ← ИСПРАВЛЕНИЕ 1 */
 static void    ICM_StartBusRead       (ICM_Bus_t *bus, uint8_t idx);
 static void    ICM_NextSensor         (ICM_Bus_t *bus);
 static void    ICM_OnSpiEot           (ICM_Bus_t *bus);
@@ -224,26 +224,19 @@ uint8_t ICM_ReadReg(ICM_Sensor_t *sensor, uint8_t reg)
     return result;
 }
 
-static uint8_t ICM_WaitIRegDone(ICM_Sensor_t *sensor)
+/* =============================================================================
+ * ИСПРАВЛЕНИЕ 1: ICM_WaitIRegReady — задержка вместо polling.
+ *
+ * REG_MISC2 bit0 (ICM45686_MISC2_IREG_DONE) в ICM-45686 — это флаг
+ * soft_rst_done, а НЕ флаг готовности IREG-транзакции. Polling этого
+ * бита не гарантирует завершения записи в IREG и может зависнуть,
+ * из-за чего tmst_en и другие IREG-биты не записываются.
+ * По даташиту достаточно ≥ 4 мкс. Используем 10 мкс с запасом.
+ * =============================================================================
+ */
+static void ICM_WaitIRegReady(void)
 {
-    uint32_t timeout = 500U;
-    uint8_t  misc2;
-
-    ICM_DelayUs(ICM45686_IREG_WAIT_US);
-
-    do
-    {
-        misc2 = ICM_ReadReg(sensor, ICM45686_REG_REG_MISC2);
-        if ((misc2 & ICM45686_MISC2_IREG_DONE) != 0U)
-        {
-            return 1U;
-        }
-        ICM_DelayUs(1U);
-        timeout--;
-    }
-    while (timeout != 0U);
-
-    return 0U;
+    ICM_DelayUs(10U);
 }
 
 void ICM_WriteIReg(ICM_Sensor_t *sensor,
@@ -253,9 +246,9 @@ void ICM_WriteIReg(ICM_Sensor_t *sensor,
 {
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
-    ICM_WaitIRegDone(sensor);
+    ICM_WaitIRegReady();
     ICM_WriteReg(sensor, ICM45686_REG_IREG_DATA, value);
-    ICM_WaitIRegDone(sensor);
+    ICM_WaitIRegReady();
 }
 
 uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
@@ -264,7 +257,7 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
 {
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_15_8, addr_h);
     ICM_WriteReg(sensor, ICM45686_REG_IREG_ADDR_7_0,  addr_l);
-    ICM_WaitIRegDone(sensor);
+    ICM_WaitIRegReady();
     return ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
 }
 
@@ -348,28 +341,15 @@ uint32_t ICM_InitAllSensors(void)
                                     ICM45686_IREG_GYRO_SRC_CTRL_L);
             reg_val  = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) |
                        (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
-            ICM_WriteIReg(sensor,
+            ICM_WriteIReg(sensor,\
                           ICM45686_IREG_GYRO_SRC_CTRL_H,
                           ICM45686_IREG_GYRO_SRC_CTRL_L,
                           reg_val);
 
-            /* ШАГ 9: rtc_mode = 1 */
-            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
-            reg_val |= ICM45686_RTC_MODE_EN;
-            ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
-
-            reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
-            if ((reg_val & ICM45686_RTC_MODE_EN) != 0U)
-                g_clk_ok_mask   |= (1UL << sensor->sensor_id);
-            else
-                g_clk_fail_mask |= (1UL << sensor->sensor_id);
-
-            /* ШАГ 9б: ВКЛЮЧИТЬ TIMESTAMP-СЧЁТЧИК
-             *  SMC_CONTROL_0 — IREG 0xA258, bit0 = tmst_en = 1
-             *
-             *  FIFO_CONFIG4.fifo_tmst_fsync_en (0x22, bit1) только
-             *  разрешает класть timestamp в FIFO-пакет. БЕЗ ЭТОГО
-             *  БИТА сам счётчик не тикает → timestamp всегда 0x0000.
+            /* ШАГ 9а: СНАЧАЛА tmst_en = 1 (IREG 0xA258, bit0)
+             * ИСПРАВЛЕНИЕ 2: tmst_en должен быть включён ДО rtc_mode.
+             * Если сначала подать CLKIN через rtc_mode, а потом включить
+             * счётчик — первые пакеты получают timestamp = 0x0000.
              */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_SMC_CONTROL_0_H,
@@ -379,6 +359,17 @@ uint32_t ICM_InitAllSensors(void)
                           ICM45686_IREG_SMC_CONTROL_0_H,
                           ICM45686_IREG_SMC_CONTROL_0_L,
                           reg_val);
+
+            /* ШАГ 9б: ПОТОМ rtc_mode = 1 (0x26, bit5) */
+            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
+            reg_val |= ICM45686_RTC_MODE_EN;
+            ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
+
+            reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
+            if ((reg_val & ICM45686_RTC_MODE_EN) != 0U)
+                g_clk_ok_mask   |= (1UL << sensor->sensor_id);
+            else
+                g_clk_fail_mask |= (1UL << sensor->sensor_id);
 
             /* ШАГ 10: ODR + FSR */
             ICM_WriteReg(sensor,
