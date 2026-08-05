@@ -3463,20 +3463,20 @@ LOAD C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.exte
  .debug_macro   0x0002b8bb      0x409 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
  .debug_macro   0x0002bcc4      0x2f2 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_utils.o
 
-.debug_line     0x00000000     0xae12
- .debug_line    0x00000000      0x95c ./Core/Src/icm45686_data.o
- .debug_line    0x0000095c     0x163f ./Core/Src/icm45686_spi.o
- .debug_line    0x00001f9b     0x1a1b ./Core/Src/main.o
- .debug_line    0x000039b6      0xea3 ./Core/Src/stm32h7xx_it.o
- .debug_line    0x00004859      0x83a ./Core/Src/system_stm32h7xx.o
- .debug_line    0x00005093      0xaf8 ./Core/Src/uart_telemetry.o
- .debug_line    0x00005b8b       0x7b ./Core/Startup/startup_stm32h723zgtx.o
- .debug_line    0x00005c06      0x724 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_gpio.o
- .debug_line    0x0000632a     0x1dbd ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_rcc.o
- .debug_line    0x000080e7      0x97d ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_spi.o
- .debug_line    0x00008a64      0xcd0 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_tim.o
- .debug_line    0x00009734      0x91f ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
- .debug_line    0x0000a053      0xdbf ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_utils.o
+.debug_line     0x00000000     0xae10
+ .debug_line    0x00000000      0x95a ./Core/Src/icm45686_data.o
+ .debug_line    0x0000095a     0x163f ./Core/Src/icm45686_spi.o
+ .debug_line    0x00001f99     0x1a1b ./Core/Src/main.o
+ .debug_line    0x000039b4      0xea3 ./Core/Src/stm32h7xx_it.o
+ .debug_line    0x00004857      0x83a ./Core/Src/system_stm32h7xx.o
+ .debug_line    0x00005091      0xaf8 ./Core/Src/uart_telemetry.o
+ .debug_line    0x00005b89       0x7b ./Core/Startup/startup_stm32h723zgtx.o
+ .debug_line    0x00005c04      0x724 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_gpio.o
+ .debug_line    0x00006328     0x1dbd ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_rcc.o
+ .debug_line    0x000080e5      0x97d ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_spi.o
+ .debug_line    0x00008a62      0xcd0 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_tim.o
+ .debug_line    0x00009732      0x91f ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
+ .debug_line    0x0000a051      0xdbf ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_utils.o
 
 .debug_str      0x00000000    0xfb047
  .debug_str     0x00000000    0xfb047 ./Core/Src/icm45686_data.o

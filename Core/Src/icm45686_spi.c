@@ -465,28 +465,34 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_REG_FIFO_CONFIG0,
                          ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
 
+            /* ✅ Watermark в ПАКЕТАХ (не байтах!).
+             *    ICM_FIFO_WATERMARK_PACKETS = 10
+             *    Было: ICM_FIFO_WATERMARK_BYTES = 160 → неверно */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG1_0,
-                         (uint8_t)(ICM_FIFO_WATERMARK_BYTES & 0x00FFU));
+                         (uint8_t)(ICM_FIFO_WATERMARK_PACKETS & 0x00FFU));
 
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG1_1,
-                         (uint8_t)((ICM_FIFO_WATERMARK_BYTES >> 8U) & 0x00FFU));
+                         (uint8_t)((ICM_FIFO_WATERMARK_PACKETS >> 8U) & 0x00FFU));
 
-            ICM_WriteReg(sensor,
-                         ICM45686_REG_FIFO_CONFIG4,
-                         ICM45686_FIFO_TMST_FSYNC_EN);
+            /* ✅ Правильный порядок: сначала CONFIG3, потом CONFIG4 */
 
-            /* Сначала без IF_EN */
+            /* FIFO_CONFIG3: включить accel+gyro (без IF_EN пока) */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN);
 
-            /* Затем с IF_EN */
+            /* FIFO_CONFIG3: теперь с IF_EN */
             ICM_WriteReg(sensor,
                          ICM45686_REG_FIFO_CONFIG3,
                          ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN |
                          ICM45686_FIFO_IF_EN);
+
+            /* FIFO_CONFIG4: timestamp enable */
+            ICM_WriteReg(sensor,
+                         ICM45686_REG_FIFO_CONFIG4,
+                         ICM45686_FIFO_TMST_FSYNC_EN);
 
             /* Flush FIFO */
             ICM_WriteReg(sensor,
