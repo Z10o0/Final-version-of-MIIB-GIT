@@ -1,51 +1,35 @@
-/**
- * @file    icm45686_data.c
- * @brief   Разбор 20-байтных HIRES FIFO-пакетов ICM-45686.
- *
- * ТОЧНЫЙ формат (Big-Endian, из DS-000577 + SlimeVR reference impl):
- *
- *  Byte  0      Header
- *  Byte  1      Accel X [19:12]  MSB
- *  Byte  2      Accel X [11:4]   LSB
- *  Byte  3      Accel Y [19:12]
- *  Byte  4      Accel Y [11:4]
- *  Byte  5      Accel Z [19:12]
- *  Byte  6      Accel Z [11:4]
- *  Byte  7      Gyro  X [19:12]
- *  Byte  8      Gyro  X [11:4]
- *  Byte  9      Gyro  Y [19:12]
- *  Byte 10      Gyro  Y [11:4]
- *  Byte 11      Gyro  Z [19:12]
- *  Byte 12      Gyro  Z [11:4]
- *  Byte 13      Temp  (1 byte, MSB)
- *  Byte 14      Timestamp LSB
- *  Byte 15      Timestamp MSB
- *  Byte 16      (reserved/ext)
- *  Byte 17      Accel X[3:0] hi-nibble | Gyro X[3:0] lo-nibble
- *  Byte 18      Accel Y[3:0] hi-nibble | Gyro Y[3:0] lo-nibble
- *  Byte 19      Accel Z[3:0] hi-nibble | Gyro Z[3:0] lo-nibble
- *
- * Сборка 20-bit знакового int32_t (через сдвиг в старшие биты + приведение):
- *   accel_x = (int32_t)( (pkt[1]<<24) | (pkt[2]<<16) | ((pkt[17]&0xF0)<<8) )
- *   gyro_x  = (int32_t)( (pkt[7]<<24) | (pkt[8]<<16) | ((pkt[17]&0x0F)<<12) )
- *   Sign-extend происходит автоматически через (int32_t) — бит 31 = знаковый.
- *   Для получения "нормального" 20-бит числа сдвинь вправо на 12:
- *   val20 = accel_x >> 12
- */
-
 #include "icm45686_data.h"
 #include "icm45686_spi.h"
 #include "icm45686_regs.h"
 #include <string.h>
 
 #ifndef ICM45686_FIFO_HEADER_TMST_BIT
-#define ICM45686_FIFO_HEADER_TMST_BIT   (1U << 3)
+#define ICM45686_FIFO_HEADER_TMST_BIT  (1U << 3)
+#endif
+#ifndef ICM45686_FIFO_HEADER_MSG_BIT
+#define ICM45686_FIFO_HEADER_MSG_BIT   (1U << 7)
 #endif
 
-/* Маска невалидных данных (датчик шлёт 0x8000 если данные недоступны) */
-static const uint8_t ICM_INVALID_DATA[6] = {0x80, 0x00, 0x80, 0x00, 0x80, 0x00};
-
 ICM_SensorBatch_t g_sensor_batches[ICM_TOTAL_SENSORS];
+
+/*
+ * Сборка 20-битного знакового значения:
+ *   hi  = байт H [19:12]  (MSB)
+ *   lo  = байт L [11:4]
+ *   lsb = nibble [3:0]
+ *
+ * Алгоритм: складываем в int32_t, делаем sign-extend через сдвиг.
+ *   raw = (hi << 12) | (lo << 4) | lsb   → 20-битное число в [19:0]
+ *   sign-extend: (raw << 12) >> 12         → знак из бита 19 на биты [31:20]
+ */
+static inline int32_t icm_build20(uint8_t hi, uint8_t lo, uint8_t lsb)
+{
+    int32_t raw = ((uint32_t)hi  << 12U) |
+                  ((uint32_t)lo  <<  4U) |
+                  ((uint32_t)lsb & 0x0FU);
+    /* Арифметический sign-extend с бита 19 */
+    return (raw << 12) >> 12;
+}
 
 void ICM_ParseFIFOBuffer(const uint8_t    *raw_buf,
                          uint16_t          buf_len,
@@ -53,8 +37,8 @@ void ICM_ParseFIFOBuffer(const uint8_t    *raw_buf,
 {
     uint16_t       offset  = 0U;
     uint8_t        pkt_cnt = 0U;
-    uint8_t        header;
     const uint8_t *pkt;
+    uint8_t        header;
 
     batch->count = 0U;
 
@@ -63,7 +47,6 @@ void ICM_ParseFIFOBuffer(const uint8_t    *raw_buf,
         pkt    = &raw_buf[offset];
         header = pkt[0];
 
-        /* Пропускаем пустые MSG-пакеты */
         if ((header & ICM45686_FIFO_HEADER_MSG_BIT) != 0U)
         {
             offset += 20U;
@@ -76,72 +59,43 @@ void ICM_ParseFIFOBuffer(const uint8_t    *raw_buf,
             if (pkt_cnt < ICM_FIFO_POLL_PACKETS)
             {
                 ICM_Sample_t *smp = &batch->samples[pkt_cnt];
-                memset(smp, 0x00, sizeof(ICM_Sample_t));
 
-                /* ============================================================
-                 * ACCEL: Big-Endian, 20-bit
-                 * Сборка: сдвиг MSB в бит31, LSB в бит23, nibble в бит[15:12]
-                 * Байты 17,18,19: hi-nibble = accel X/Y/Z [3:0]
-                 * Проверка валидности: байты 1-6 не должны быть 0x80,0x00,...
-                 * ============================================================ */
-                if (memcmp(&pkt[1], ICM_INVALID_DATA, 6U) != 0)
-                {
-                    smp->accel_x = (int32_t)(
-                        ((uint32_t)pkt[1]  << 24U) |
-                        ((uint32_t)pkt[2]  << 16U) |
-                        (((uint32_t)pkt[17] & 0xF0U) << 8U)
-                    );
-                    smp->accel_y = (int32_t)(
-                        ((uint32_t)pkt[3]  << 24U) |
-                        ((uint32_t)pkt[4]  << 16U) |
-                        (((uint32_t)pkt[18] & 0xF0U) << 8U)
-                    );
-                    smp->accel_z = (int32_t)(
-                        ((uint32_t)pkt[5]  << 24U) |
-                        ((uint32_t)pkt[6]  << 16U) |
-                        (((uint32_t)pkt[19] & 0xF0U) << 8U)
-                    );
-                }
+                /*
+                 * ACCEL — Byte 1=Ax H, 2=Ax L, ..., 6=Az L
+                 * Byte 17: hi-nibble = Ax[3:0], lo-nibble = Gx[3:0]
+                 * Byte 18: hi-nibble = Ay[3:0], lo-nibble = Gy[3:0]
+                 * Byte 19: hi-nibble = Az[3:0], lo-nibble = Gz[3:0]
+                 */
+                smp->accel_x = icm_build20(pkt[1],  pkt[2],  pkt[17] >> 4U);
+                smp->accel_y = icm_build20(pkt[3],  pkt[4],  pkt[18] >> 4U);
+                smp->accel_z = icm_build20(pkt[5],  pkt[6],  pkt[19] >> 4U);
 
-                /* ============================================================
-                 * GYRO: Big-Endian, 20-bit
-                 * Байты 17,18,19: lo-nibble = gyro X/Y/Z [3:0]
-                 * lo-nibble сдвигается на 12 (бит[15:12] в 32-бит слове)
-                 * ============================================================ */
-                if (memcmp(&pkt[7], ICM_INVALID_DATA, 6U) != 0)
-                {
-                    smp->gyro_x = (int32_t)(
-                        ((uint32_t)pkt[7]  << 24U) |
-                        ((uint32_t)pkt[8]  << 16U) |
-                        (((uint32_t)pkt[17] & 0x0FU) << 12U)
-                    );
-                    smp->gyro_y = (int32_t)(
-                        ((uint32_t)pkt[9]  << 24U) |
-                        ((uint32_t)pkt[10] << 16U) |
-                        (((uint32_t)pkt[18] & 0x0FU) << 12U)
-                    );
-                    smp->gyro_z = (int32_t)(
-                        ((uint32_t)pkt[11] << 24U) |
-                        ((uint32_t)pkt[12] << 16U) |
-                        (((uint32_t)pkt[19] & 0x0FU) << 12U)
-                    );
-                }
+                /*
+                 * GYRO — Byte 7=Gx H, 8=Gx L, ..., 12=Gz L
+                 * lo-nibble байт 17,18,19
+                 */
+                smp->gyro_x  = icm_build20(pkt[7],  pkt[8],  pkt[17] & 0x0FU);
+                smp->gyro_y  = icm_build20(pkt[9],  pkt[10], pkt[18] & 0x0FU);
+                smp->gyro_z  = icm_build20(pkt[11], pkt[12], pkt[19] & 0x0FU);
 
-                /* ============================================================
-                 * ТЕМПЕРАТУРА: байт 13, 1 байт MSB
-                 * Формула: temp_c = (int8_t)pkt[13] / 2.0f + 25.0f
-                 * Сохраняем сырой байт как int8_t
-                 * ============================================================ */
-                smp->temp_raw = (int16_t)(int8_t)pkt[13];
+                /*
+                 * TEMP — Big-Endian: Byte 13=H, Byte 14=L
+                 * Формула: °C = temp_raw / 128.0f + 25.0f
+                 */
+                smp->temp_raw = (int16_t)(((uint16_t)pkt[13] << 8U) |
+                                           (uint16_t)pkt[14]);
 
-                /* ============================================================
-                 * TIMESTAMP: Little-Endian, байты 14 (LSB) и 15 (MSB)
-                 * ============================================================ */
+                /*
+                 * TIMESTAMP — Big-Endian: Byte 15=H, Byte 16=L
+                 */
                 if ((header & ICM45686_FIFO_HEADER_TMST_BIT) != 0U)
                 {
-                    smp->timestamp = (uint16_t)(
-                        ((uint16_t)pkt[15] << 8U) | (uint16_t)pkt[14]
-                    );
+                    smp->timestamp = (uint16_t)(((uint16_t)pkt[15] << 8U) |
+                                                 (uint16_t)pkt[16]);
+                }
+                else
+                {
+                    smp->timestamp = 0U;
                 }
 
                 pkt_cnt++;
@@ -156,8 +110,7 @@ void ICM_ParseFIFOBuffer(const uint8_t    *raw_buf,
 
 void ICM_ParseAllFIFO(void)
 {
-    uint8_t  b, s;
-    uint8_t  sensor_id;
+    uint8_t  b, s, sensor_id;
     uint32_t fault_mask = g_sensor_fault_mask;
 
     const uint16_t data_offset = 1U;
