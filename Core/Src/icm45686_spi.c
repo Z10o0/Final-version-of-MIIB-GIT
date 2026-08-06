@@ -342,8 +342,10 @@ uint32_t ICM_InitAllSensors(void)
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG0, ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
 
             /* 3. Watermark */
-            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_0, (uint8_t)(ICM_FIFO_WATERMARK_PACKETS & 0x00FFU));
-            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_1, (uint8_t)((ICM_FIFO_WATERMARK_PACKETS >> 8U) & 0x00FFU));
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_0,
+                (uint8_t)(ICM_FIFO_WATERMARK_BYTES & 0x00FFU));
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_1,
+                (uint8_t)((ICM_FIFO_WATERMARK_BYTES >> 8U) & 0x00FFU));
 
             /* 4. Включаем Timestamp */
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG4, ICM45686_FIFO_TMST_FSYNC_EN);
