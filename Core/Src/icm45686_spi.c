@@ -252,6 +252,67 @@ uint8_t ICM_ReadIReg(ICM_Sensor_t *sensor,
     return ICM_ReadReg(sensor, ICM45686_REG_IREG_DATA);
 }
 
+/* --------------------------------------------------------------------------
+ * ICM_WriteIRegBurst — burst-запись IREG за одну CS-транзакцию.
+ *
+ * Даташит DS-000577, §14.2, правило 3:
+ *   "The above programming steps must be performed in a
+ *    single burst-write transaction to prevent an
+ *    un-intended read-pre-fetch operation."
+ *
+ * Формат пакета (5 байт за один CS):
+ *   [IREG_ADDR_15_8 | WRITE] [addr_h] [addr_l_value] [IREG_DATA | WRITE] [value]
+ *
+ * Примечание: ICM_ReadIReg оставляем как есть — по §14.5 адрес и чтение
+ * данных намеренно разделены двумя транзакциями (read-prefetch модель).
+ * -------------------------------------------------------------------------- */
+static void ICM_WriteIRegBurst(ICM_Sensor_t *sensor,
+                                uint8_t       addr_h,
+                                uint8_t       addr_l,
+                                uint8_t       value)
+{
+    SPI_TypeDef *spi = sensor->spi;
+
+    ICM_SPI_EnsureDisabled(spi);
+    LL_SPI_SetTransferSize(spi, 5U);
+    LL_SPI_SetInternalSSLevel(spi, LL_SPI_SS_LEVEL_HIGH);
+    LL_SPI_ClearFlag_EOT(spi);
+
+    ICM_CS_Low(sensor);
+    LL_SPI_Enable(spi);
+    LL_SPI_StartMasterTransfer(spi);
+
+    /* Байт 0: адрес IREG_ADDR_15_8 (запись) */
+    while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+    LL_SPI_TransmitData8(spi, ICM45686_REG_IREG_ADDR_15_8 & 0x7FU);
+
+    /* Байт 1: старшие 8 бит внутреннего адреса */
+    while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+    LL_SPI_TransmitData8(spi, addr_h);
+
+    /* Байт 2: младшие 8 бит внутреннего адреса */
+    while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+    LL_SPI_TransmitData8(spi, addr_l);
+
+    /* Байт 3: адрес IREG_DATA (запись, auto-increment уже не нужен) */
+    while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+    LL_SPI_TransmitData8(spi, ICM45686_REG_IREG_DATA & 0x7FU);
+
+    /* Байт 4: само значение */
+    while (LL_SPI_IsActiveFlag_TXP(spi) == 0U) {}
+    LL_SPI_TransmitData8(spi, value);
+
+    ICM_SPI_WaitEOT(spi);
+    ICM_SPI_DrainRx(spi, 5U);
+
+    ICM_CS_High(sensor);
+    LL_SPI_Disable(spi);
+    while (LL_SPI_IsEnabled(spi) != 0U) {}
+
+    /* Минимальное время между IREG-операциями: 4 мкс (§14.3) */
+    ICM_DelayUs(10U);
+}
+
 uint32_t ICM_InitAllSensors(void)
 {
     ICM_Bus_t * const buses[ICM_SPI_BUS_COUNT] = { &g_bus_spi1, &g_bus_spi5, &g_bus_spi4 };
@@ -270,108 +331,236 @@ uint32_t ICM_InitAllSensors(void)
         {
             ICM_Sensor_t *sensor = &buses[bus_idx]->sensors[sensor_idx];
 
-            /* ШАГ 1: WHO_AM_I до сброса */
-            if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE) {
-                ICM_MarkFault(sensor); continue;
+            /* ------------------------------------------------------------------
+             * ШАГ 1: WHO_AM_I — проверка связи ДО сброса
+             * ------------------------------------------------------------------ */
+            if (ICM_ReadReg(sensor, ICM45686_REG_WHO_AM_I) != ICM45686_WHO_AM_I_VALUE)
+            {
+                ICM_MarkFault(sensor);
+                continue;
             }
 
-            /* ШАГ 2: Soft Reset */
+            /* ------------------------------------------------------------------
+             * ШАГ 2: Soft Reset
+             * ------------------------------------------------------------------ */
             ICM_WriteReg(sensor, ICM45686_REG_REG_MISC2, ICM45686_MISC2_SOFT_RST);
 
-            /* ШАГ 3: Ждём RESET_DONE */
+            /* ------------------------------------------------------------------
+             * ШАГ 3: Ожидание RESET_DONE (INT1_STATUS0[bit7])
+             * Надёжнее чем фиксированная задержка (DS-000577 §7)
+             * ------------------------------------------------------------------ */
             timeout = 1000U;
             do {
                 ICM_DelayUs(10U);
                 reg_val = ICM_ReadReg(sensor, ICM45686_REG_INT1_STATUS0);
                 timeout--;
-            } while (((reg_val & ICM45686_INT1_STATUS0_RESET_DONE) == 0U) && (timeout != 0U));
+            } while (((reg_val & ICM45686_INT1_STATUS0_RESET_DONE) == 0U) &&
+                     (timeout != 0U));
 
             if (timeout == 0U) { ICM_MarkFault(sensor); continue; }
 
+            /* ------------------------------------------------------------------
+             * ШАГ 3.5: Big Endian — SREGDATAENDIANSEL=1 (IREG 0xA267, bit1)
+             *
+             * DS-000577 §15: по умолчанию Little Endian. Описание регистров
+             * в даташите — Big Endian. Устанавливаем первым после сброса,
+             * до любых других настроек.
+             *
+             * [FIX-3] Используем ICM_WriteIRegBurst — единая CS-транзакция.
+             * ------------------------------------------------------------------ */
+            ICM_WriteIRegBurst(sensor, 0xA2U, 0x67U, 0x02U);
 
-            /* === ОБЯЗАТЕЛЬНО: включаем Big Endian для FIFO и регистров ===
-             * SREGCTRL.SREGDATAENDIANSEL = 1 (Big Endian)
-             * IREG IPREGTOP1 base = 0xA200, reg addr = 0x67 → 0xA267
-             * Даташит DS-000577, раздел 20.50 SREGCTRL
-             */
-            ICM_WriteIReg(sensor, 0xA2U, 0x67U, 0x02U);  /* bit1 = SREGDATAENDIANSEL */
-            ICM_DelayUs(10U);
-
-
-            /* ШАГ 4 & 5: AUX1 off и INT2 -> CLKIN */
-            reg_val = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD);
-            reg_val |= ICM45686_AUX1_ENABLE_OVRD; reg_val &= ~ICM45686_AUX1_ENABLE_OVRD_VAL;
+            /* ------------------------------------------------------------------
+             * ШАГ 4: AUX1 off
+             * IOC_PAD_SCENARIO_AUX_OVRD (0x30):
+             *   bit1 (AUX1_ENABLE_OVRD)     = 1 — включаем override
+             *   bit0 (AUX1_ENABLE_OVRD_VAL) = 0 — AUX1 выключен
+             * ------------------------------------------------------------------ */
+            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD);
+            reg_val |= ICM45686_AUX1_ENABLE_OVRD;
+            reg_val &= ~ICM45686_AUX1_ENABLE_OVRD_VAL;
             ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD, reg_val);
 
-            reg_val = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD);
-            reg_val |= ICM45686_INT2_CFG_OVRD_EN; reg_val = (reg_val & ~0x03U) | ICM45686_INT2_CFG_CLKIN_VAL;
+            /* ------------------------------------------------------------------
+             * ШАГ 5: INT2 → CLKIN
+             * IOC_PAD_SCENARIO_OVRD (0x31):
+             *   bit2 (INT2_CFG_OVRD_EN)  = 1 — включаем override
+             *   bits[1:0]                = 0b10 — режим CLKIN
+             * ------------------------------------------------------------------ */
+            reg_val  = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD);
+            reg_val |= ICM45686_INT2_CFG_OVRD_EN;
+            reg_val  = (reg_val & ~0x03U) | ICM45686_INT2_CFG_CLKIN_VAL;
             ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD, reg_val);
 
-            /* ШАГ 6-8: I3C STC off и FIR фильтры (Оставляем как было) */
-            reg_val = ICM_ReadIReg(sensor, ICM45686_IREG_I3C_STC_CFG_H, ICM45686_IREG_I3C_STC_CFG_L);
+            /* ------------------------------------------------------------------
+             * ШАГ 5.5 [FIX-5]: RTC_CONFIG (0x26)
+             * rtc_align (bit6) = 1 — выравнивание первого пакета по CLKIN
+             * rtc_mode  (bit5) = 1 — включаем RTC/CLKIN режим
+             * Ранее шаг был описан в комментарии "9б", но не реализован.
+             * ------------------------------------------------------------------ */
+            ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG,
+                         ICM45686_RTC_ALIGN_EN | ICM45686_RTC_MODE_EN);
+
+            /* ------------------------------------------------------------------
+             * ШАГ 6: I3C STC mode off (IREG 0xA268, bit2 = 0)
+             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ------------------------------------------------------------------ */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_I3C_STC_CFG_H,
+                                    ICM45686_IREG_I3C_STC_CFG_L);
             reg_val &= ~ICM45686_I3C_STC_MODE_BIT;
-            ICM_WriteIReg(sensor, ICM45686_IREG_I3C_STC_CFG_H, ICM45686_IREG_I3C_STC_CFG_L, reg_val);
+            ICM_WriteIRegBurst(sensor,
+                               ICM45686_IREG_I3C_STC_CFG_H,
+                               ICM45686_IREG_I3C_STC_CFG_L,
+                               reg_val);
 
-            reg_val = ICM_ReadIReg(sensor, ICM45686_IREG_ACCEL_SRC_CTRL_H, ICM45686_IREG_ACCEL_SRC_CTRL_L);
-            reg_val = (reg_val & ~0x03U) | ICM45686_ACCEL_SRC_FIR_INTERP;
-            ICM_WriteIReg(sensor, ICM45686_IREG_ACCEL_SRC_CTRL_H, ICM45686_IREG_ACCEL_SRC_CTRL_L, reg_val);
+            /* ------------------------------------------------------------------
+             * ШАГ 7: Accel source = FIR + interpolation
+             * IREG 0xA57B, bits[1:0] = 0b10
+             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ------------------------------------------------------------------ */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_ACCEL_SRC_CTRL_H,
+                                    ICM45686_IREG_ACCEL_SRC_CTRL_L);
+            reg_val  = (reg_val & ~0x03U) | ICM45686_ACCEL_SRC_FIR_INTERP;
+            ICM_WriteIRegBurst(sensor,
+                               ICM45686_IREG_ACCEL_SRC_CTRL_H,
+                               ICM45686_IREG_ACCEL_SRC_CTRL_L,
+                               reg_val);
 
-            reg_val = ICM_ReadIReg(sensor, ICM45686_IREG_GYRO_SRC_CTRL_H, ICM45686_IREG_GYRO_SRC_CTRL_L);
-            reg_val = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) | (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
-            ICM_WriteIReg(sensor, ICM45686_IREG_GYRO_SRC_CTRL_H, ICM45686_IREG_GYRO_SRC_CTRL_L, reg_val);
+            /* ------------------------------------------------------------------
+             * ШАГ 8: Gyro source = FIR + interpolation
+             * IREG 0xA4A6, bits[6:5] = 0b10
+             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ------------------------------------------------------------------ */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_GYRO_SRC_CTRL_H,
+                                    ICM45686_IREG_GYRO_SRC_CTRL_L);
+            reg_val  = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK)
+                     | (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
+            ICM_WriteIRegBurst(sensor,
+                               ICM45686_IREG_GYRO_SRC_CTRL_H,
+                               ICM45686_IREG_GYRO_SRC_CTRL_L,
+                               reg_val);
 
-            /* ШАГ 9: включаем timestamp-счётчик
-             * tmst_en (bit0) = главный тик счётчика.
-             * ACCEL_LP_CLK_SEL (bit4) — ТОЛЬКО для LP-режима, в LN НЕ ставим!
-             */
-            reg_val = ICM_ReadIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H,
-                                           ICM45686_IREG_SMC_CONTROL_0_L);
-            reg_val |= ICM45686_TMST_EN;              /* бит 0 — запускает счётчик */
-            reg_val &= ~ICM45686_ACCEL_LP_CLK_SEL;   /* бит 4 — убираем, мы в LN! */
-            ICM_WriteIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H,
-                                  ICM45686_IREG_SMC_CONTROL_0_L, reg_val);
-            ICM_DelayUs(500U);
+            /* ------------------------------------------------------------------
+             * ШАГ 9: ODR + FSR (до питания — допустимо, датчики ещё OFF)
+             * ------------------------------------------------------------------ */
+            ICM_WriteReg(sensor, ICM45686_REG_ACCEL_CONFIG0,
+                         ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
+            ICM_WriteReg(sensor, ICM45686_REG_GYRO_CONFIG0,
+                         ICM_GYRO_FS_VALUE  | ICM_GYRO_ODR_VALUE);
 
-            /* FIFO_CONFIG4: разрешаем класть timestamp в пакет */
-            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG4, ICM45686_FIFO_TMST_FSYNC_EN);
+            /* ------------------------------------------------------------------
+             * ШАГ 10: PWR_MGMT0 — включаем Gyro LN + Accel LN
+             * Питание ДОЛЖНО быть ДО tmst_en и ДО FIFO!
+             * ------------------------------------------------------------------ */
+            ICM_WriteReg(sensor, ICM45686_REG_PWR_MGMT0,
+                         ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
 
-            /* ШАГ 10: ODR + FSR */
-            ICM_WriteReg(sensor, ICM45686_REG_ACCEL_CONFIG0, ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
-            ICM_WriteReg(sensor, ICM45686_REG_GYRO_CONFIG0, ICM_GYRO_FS_VALUE | ICM_GYRO_ODR_VALUE);
-
-            /* ШАГ 11: Питание ДО FIFO! */
-            ICM_WriteReg(sensor, ICM45686_REG_PWR_MGMT0, ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
+            /* Минимум 200 мкс для стабилизации PLL после включения (DS-000577 §5) */
             ICM_DelayMs(5U);
 
-            /* ==============================================================
+            /* ------------------------------------------------------------------
+             * ШАГ 11 [FIX-1]: tmst_en ПОСЛЕ PWR_MGMT0
+             *
+             * SMC_CONTROL_0 (IREG 0xA258):
+             *   bit0 (TMST_EN)           = 1 — запускает сам счётчик
+             *   bit4 (ACCEL_LP_CLK_SEL)  = 0 — только для LP-режима, убираем
+             *
+             * Счётчик требует активного тактирования от датчиков.
+             * До PWR_MGMT0 он не тикает → timestamp = 0 в каждом пакете.
+             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ------------------------------------------------------------------ */
+            reg_val  = ICM_ReadIReg(sensor,
+                                    ICM45686_IREG_SMC_CONTROL_0_H,
+                                    ICM45686_IREG_SMC_CONTROL_0_L);
+            reg_val |=  ICM45686_TMST_EN;
+            reg_val &= ~ICM45686_ACCEL_LP_CLK_SEL;
+            ICM_WriteIRegBurst(sensor,
+                               ICM45686_IREG_SMC_CONTROL_0_H,
+                               ICM45686_IREG_SMC_CONTROL_0_L,
+                               reg_val);
+
+            /* Даём счётчику 500 мкс на инициализацию */
+            ICM_DelayUs(500U);
+
+            /* ------------------------------------------------------------------
+             * ШАГ 11.5 [FIX-2]: TMST_WOM_CONFIG (0x23)
+             *
+             * TMST_DELTA_EN (bit3) = 1:
+             *   В FIFO пишется DELTA между текущим и предыдущим timestamp.
+             *   Без этого бита в пакете всегда 0x0000, даже если счётчик тикает.
+             *
+             * TMST_RESOL (bit2) = 0:
+             *   Разрешение 1 мкс/LSB (максимальная точность).
+             *   При 1 — 16 мкс/LSB.
+             *
+             * Остальные биты [1:0] — WOM, оставляем 0.
+             * ------------------------------------------------------------------ */
+            ICM_WriteReg(sensor, 0x23U,
+                         (1U << 3) |   /* TMST_DELTA_EN = 1 */
+                         (0U << 2));   /* TMST_RESOL    = 0 → 1 мкс/LSB */
+
+            /* ------------------------------------------------------------------
              * ШАГ 12: FIFO CONFIGURATION (20-BYTE HIRES MODE)
-             * ============================================================== */
-            /* 1. Останавливаем интерфейс и очищаем FIFO */
-            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG3, 0x00);
+             *
+             * Правильный порядок (DS-000577 §6):
+             *   1. IF_EN=0 (остановить)
+             *   2. FLUSH
+             *   3. Режим и глубина
+             *   4. Watermark (LSB первым!)
+             *   5. FIFO_CONFIG4 (timestamp enable)
+             *   6. Accel+Gyro+HIRES (без IF_EN)
+             *   7. + IF_EN (последним!)
+             *
+             * [FIX-4] Убрана дублирующая запись FIFO_CONFIG4 из шага 9.
+             * ------------------------------------------------------------------ */
+
+            /* 1. Останавливаем FIFO-интерфейс */
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG3, 0x00U);
+
+            /* 2. Flush — сбрасываем указатели FIFO */
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG2, ICM45686_FIFO_FLUSH);
             ICM_DelayUs(100U);
 
-            /* 2. Stream mode + Max Depth */
-            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG0, ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
+            /* 3. Stream mode + глубина FIFO
+             * ICM45686_FIFO_DEPTH_MAX = 0x1E (011110) = безопасное значение
+             * (0x1F = 8K только при всех отключённых APEX, DS-000577 §17.28)
+             */
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG0,
+                         ICM45686_FIFO_MODE_STREAM | ICM45686_FIFO_DEPTH_MAX);
 
-            /* 3. Watermark */
+            /* 4. Watermark (LSB первым, затем MSB — DS-000577 §17.29) */
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_0,
-                (uint8_t)(ICM_FIFO_WATERMARK_BYTES & 0x00FFU));
+                         (uint8_t)( ICM_FIFO_WATERMARK_BYTES        & 0x00FFU));
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG1_1,
-                (uint8_t)((ICM_FIFO_WATERMARK_BYTES >> 8U) & 0x00FFU));
+                         (uint8_t)((ICM_FIFO_WATERMARK_BYTES >> 8U) & 0x00FFU));
 
-            /* 4. Включаем Timestamp */
-            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG4, ICM45686_FIFO_TMST_FSYNC_EN);
+            /* 5. Разрешаем timestamp в FIFO-пакете
+             * bit1 = FIFO_TMST_FSYNC_EN — вставляет поле в пакет.
+             * Работает только совместно с tmst_en=1 (ШАГ 11).
+             */
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG4,
+                         ICM45686_FIFO_TMST_FSYNC_EN);
 
-            /* 5. Включаем Accel, Gyro И HI-RES (!), но БЕЗ IF_EN */
+            /* 6. Включаем Accel + Gyro + HIRES, но IF_EN ещё НЕ ставим */
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG3,
-                         ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN | ICM45686_FIFO_HIRES_EN);
+                         ICM45686_FIFO_ACCEL_EN |
+                         ICM45686_FIFO_GYRO_EN  |
+                         ICM45686_FIFO_HIRES_EN);
 
-            /* 6. Включаем IF_EN */
+            /* 7. Последним включаем IF_EN — открываем FIFO-интерфейс */
             ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG3,
-                         ICM45686_FIFO_ACCEL_EN | ICM45686_FIFO_GYRO_EN | ICM45686_FIFO_HIRES_EN | ICM45686_FIFO_IF_EN);
+                         ICM45686_FIFO_ACCEL_EN  |
+                         ICM45686_FIFO_GYRO_EN   |
+                         ICM45686_FIFO_HIRES_EN  |
+                         ICM45686_FIFO_IF_EN);
 
-            /* ШАГ 13: Startup delay */
+            /* ------------------------------------------------------------------
+             * ШАГ 13: Startup delay — ждём первые валидные пакеты
+             * ICM45686_STARTUP_DELAY_MS = 200 мс (из icm45686_regs.h)
+             * ------------------------------------------------------------------ */
             ICM_DelayMs(ICM45686_STARTUP_DELAY_MS);
         }
     }
