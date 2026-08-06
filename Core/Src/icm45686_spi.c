@@ -320,17 +320,20 @@ uint32_t ICM_InitAllSensors(void)
             reg_val = (reg_val & ~ICM45686_GYRO_SRC_CTRL_MASK) | (ICM45686_GYRO_SRC_FIR_INTERP << ICM45686_GYRO_SRC_CTRL_SHIFT);
             ICM_WriteIReg(sensor, ICM45686_IREG_GYRO_SRC_CTRL_H, ICM45686_IREG_GYRO_SRC_CTRL_L, reg_val);
 
-            /* ШАГ 9: RTC и внешний клок */
-            reg_val = ICM_ReadIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H, ICM45686_IREG_SMC_CONTROL_0_L);
-            reg_val |= ICM45686_TMST_EN | ICM45686_ACCEL_LP_CLK_SEL;
-            ICM_WriteIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H, ICM45686_IREG_SMC_CONTROL_0_L, reg_val);
-
+            /* ШАГ 9: включаем timestamp-счётчик
+             * tmst_en (bit0) = главный тик счётчика.
+             * ACCEL_LP_CLK_SEL (bit4) — ТОЛЬКО для LP-режима, в LN НЕ ставим!
+             */
+            reg_val = ICM_ReadIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H,
+                                           ICM45686_IREG_SMC_CONTROL_0_L);
+            reg_val |= ICM45686_TMST_EN;              /* бит 0 — запускает счётчик */
+            reg_val &= ~ICM45686_ACCEL_LP_CLK_SEL;   /* бит 4 — убираем, мы в LN! */
+            ICM_WriteIReg(sensor, ICM45686_IREG_SMC_CONTROL_0_H,
+                                  ICM45686_IREG_SMC_CONTROL_0_L, reg_val);
             ICM_DelayUs(500U);
 
-            reg_val = ICM_ReadReg(sensor, ICM45686_REG_RTC_CONFIG);
-            reg_val |= ICM45686_RTC_ALIGN_EN | ICM45686_RTC_MODE_EN;
-            ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG, reg_val);
-            ICM_DelayUs(100U); // Даем время выровняться клоку
+            /* FIFO_CONFIG4: разрешаем класть timestamp в пакет */
+            ICM_WriteReg(sensor, ICM45686_REG_FIFO_CONFIG4, ICM45686_FIFO_TMST_FSYNC_EN);
 
             /* ШАГ 10: ODR + FSR */
             ICM_WriteReg(sensor, ICM45686_REG_ACCEL_CONFIG0, ICM_ACCEL_FS_VALUE | ICM_ACCEL_ODR_VALUE);
