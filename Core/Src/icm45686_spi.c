@@ -288,6 +288,16 @@ uint32_t ICM_InitAllSensors(void)
 
             if (timeout == 0U) { ICM_MarkFault(sensor); continue; }
 
+
+            /* === ОБЯЗАТЕЛЬНО: включаем Big Endian для FIFO и регистров ===
+             * SREGCTRL.SREGDATAENDIANSEL = 1 (Big Endian)
+             * IREG IPREGTOP1 base = 0xA200, reg addr = 0x67 → 0xA267
+             * Даташит DS-000577, раздел 20.50 SREGCTRL
+             */
+            ICM_WriteIReg(sensor, 0xA2U, 0x67U, 0x02U);  /* bit1 = SREGDATAENDIANSEL */
+            ICM_DelayUs(10U);
+
+
             /* ШАГ 4 & 5: AUX1 off и INT2 -> CLKIN */
             reg_val = ICM_ReadReg(sensor, ICM45686_REG_IOC_PAD_AUX_OVRD);
             reg_val |= ICM45686_AUX1_ENABLE_OVRD; reg_val &= ~ICM45686_AUX1_ENABLE_OVRD_VAL;
