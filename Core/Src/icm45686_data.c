@@ -2,29 +2,29 @@
  * @file  icm45686_data.c
  *
  * ICM-45686 FIFO 20-byte HIRES parser
- * Строго по даташиту DS-000577 + официальному SDK inv_imu_regmap_le.h
+ * Строго по даташиту DS-000577 §6.1 + SREGDATAENDIANSEL=1 (Big Endian).
  *
- * Датчик работает в LITTLE ENDIAN (SREGDATAENDIANSEL=0, default).
- * inv_imu_regmap_le.h в репозитории подтверждает: LE-режим.
+ * ВАЖНО: датчик настроен в Big Endian (IREG 0xA267 bit1 = 1).
+ * В Big Endian MSB-байт идёт ПЕРВЫМ в паре.
  *
- * Layout 20-byte пакета в Little Endian:
+ * Layout 20-byte пакета в Big Endian:
  *  Byte  0:  Header
- *  Byte  1:  Ax[11:4]   LSB
- *  Byte  2:  Ax[19:12]  MSB
- *  Byte  3:  Ay[11:4]   LSB
- *  Byte  4:  Ay[19:12]  MSB
- *  Byte  5:  Az[11:4]   LSB
- *  Byte  6:  Az[19:12]  MSB
- *  Byte  7:  Gx[11:4]   LSB
- *  Byte  8:  Gx[19:12]  MSB
- *  Byte  9:  Gy[11:4]   LSB
- *  Byte 10:  Gy[19:12]  MSB
- *  Byte 11:  Gz[11:4]   LSB
- *  Byte 12:  Gz[19:12]  MSB
- *  Byte 13:  Temp[7:0]  LSB
- *  Byte 14:  Temp[15:8] MSB
- *  Byte 15:  Timestamp[7:0]  LSB
- *  Byte 16:  Timestamp[15:8] MSB
+ *  Byte  1:  Ax[19:12]  MSB
+ *  Byte  2:  Ax[11:4]   LSB
+ *  Byte  3:  Ay[19:12]  MSB
+ *  Byte  4:  Ay[11:4]   LSB
+ *  Byte  5:  Az[19:12]  MSB
+ *  Byte  6:  Az[11:4]   LSB
+ *  Byte  7:  Gx[19:12]  MSB
+ *  Byte  8:  Gx[11:4]   LSB
+ *  Byte  9:  Gy[19:12]  MSB
+ *  Byte 10:  Gy[11:4]   LSB
+ *  Byte 11:  Gz[19:12]  MSB
+ *  Byte 12:  Gz[11:4]   LSB
+ *  Byte 13:  Temp[15:8] MSB
+ *  Byte 14:  Temp[7:0]  LSB
+ *  Byte 15:  Timestamp[15:8] MSB
+ *  Byte 16:  Timestamp[7:0]  LSB
  *  Byte 17:  Ax[3:0](hi nibble) | Gx[3:0](lo nibble)
  *  Byte 18:  Ay[3:0](hi nibble) | Gy[3:0](lo nibble)
  *  Byte 19:  Az[3:0](hi nibble) | Gz[3:0](lo nibble)
@@ -48,16 +48,18 @@
 ICM_SensorBatch_t g_sensor_batches[ICM_TOTAL_SENSORS];
 
 /**
- * 20-bit sign-extend из трёх компонентов.
- * msb    = байт [19:12]  (старший байт, ВТОРОЙ в пакете LE)
- * lsb    = байт [11:4]   (младший байт, ПЕРВЫЙ в пакете LE)
- * nibble = биты [3:0]    (из byte17/18/19, уже замаскирован 0x0F)
+ * build20 — сборка 20-bit знакового числа из трёх компонентов.
+ *
+ * @param msb    байт [19:12] — старший байт (первый в BE-пакете)
+ * @param lsb    байт [11:4]  — младший байт (второй в BE-пакете)
+ * @param nibble биты [3:0]   — из byte17/18/19, уже >>4 или &0x0F
  */
 static inline int32_t build20(uint8_t msb, uint8_t lsb, uint8_t nibble)
 {
-    int32_t raw = ((int32_t)(uint32_t)msb    << 12) |
-                  ((int32_t)(uint32_t)lsb    <<  4) |
+    int32_t raw = ((int32_t)(uint32_t)msb              << 12) |
+                  ((int32_t)(uint32_t)lsb              <<  4) |
                    (int32_t)(uint32_t)(nibble & 0x0FU);
+    /* sign-extend с позиции бит19 */
     return (raw << 12) >> 12;
 }
 
@@ -77,62 +79,64 @@ void ICM_ParseFIFOBuffer(const uint8_t    *raw_buf,
         pkt = &raw_buf[offset];
         hdr = pkt[0];
 
-        /* MSG-пакет: маркер конца FIFO, пропускаем */
+        /* MSG-пакет: маркер конца FIFO, останавливаемся */
         if ((hdr & FIFO_HDR_MSG_BIT) != 0U)
         {
             offset += 20U;
             continue;
         }
 
-        /* HIRES пакет */
+        /* HIRES пакет (header bit4 = 1) */
         if (((hdr & FIFO_HDR_HIRES_BIT) != 0U) && (n < ICM_FIFO_POLL_PACKETS))
         {
             ICM_Sample_t *s = &batch->samples[n];
 
             /*
-             * Little Endian: LSB-байт идёт ПЕРВЫМ, MSB ВТОРЫМ.
+             * Big Endian: MSB-байт идёт ПЕРВЫМ.
              *
              * Акселерометр:
-             *   pkt[1] = Ax[11:4] (LSB), pkt[2] = Ax[19:12] (MSB)
-             *   pkt[3] = Ay[11:4] (LSB), pkt[4] = Ay[19:12] (MSB)
-             *   pkt[5] = Az[11:4] (LSB), pkt[6] = Az[19:12] (MSB)
+             *   pkt[1] = Ax[19:12] MSB,  pkt[2] = Ax[11:4] LSB
+             *   pkt[3] = Ay[19:12] MSB,  pkt[4] = Ay[11:4] LSB
+             *   pkt[5] = Az[19:12] MSB,  pkt[6] = Az[11:4] LSB
              *
              * Гироскоп:
-             *   pkt[7]  = Gx[11:4] (LSB), pkt[8]  = Gx[19:12] (MSB)
-             *   pkt[9]  = Gy[11:4] (LSB), pkt[10] = Gy[19:12] (MSB)
-             *   pkt[11] = Gz[11:4] (LSB), pkt[12] = Gz[19:12] (MSB)
+             *   pkt[7]  = Gx[19:12] MSB, pkt[8]  = Gx[11:4] LSB
+             *   pkt[9]  = Gy[19:12] MSB, pkt[10] = Gy[11:4] LSB
+             *   pkt[11] = Gz[19:12] MSB, pkt[12] = Gz[11:4] LSB
              *
-             * Nibbles (не зависят от эндианности):
-             *   pkt[17] hi-nibble = Ax[3:0], lo-nibble = Gx[3:0]
-             *   pkt[18] hi-nibble = Ay[3:0], lo-nibble = Gy[3:0]
-             *   pkt[19] hi-nibble = Az[3:0], lo-nibble = Gz[3:0]
+             * Nibbles (эндианность не влияет):
+             *   pkt[17]: hi-nibble = Ax[3:0], lo-nibble = Gx[3:0]
+             *   pkt[18]: hi-nibble = Ay[3:0], lo-nibble = Gy[3:0]
+             *   pkt[19]: hi-nibble = Az[3:0], lo-nibble = Gz[3:0]
              */
-            s->accel_x = build20(pkt[2],  pkt[1],  pkt[17] >> 4U);
-            s->accel_y = build20(pkt[4],  pkt[3],  pkt[18] >> 4U);
-            s->accel_z = build20(pkt[6],  pkt[5],  pkt[19] >> 4U);
+            s->accel_x = build20(pkt[1], pkt[2], pkt[17] >> 4U);
+            s->accel_y = build20(pkt[3], pkt[4], pkt[18] >> 4U);
+            s->accel_z = build20(pkt[5], pkt[6], pkt[19] >> 4U);
 
-            s->gyro_x  = build20(pkt[8],  pkt[7],  pkt[17] & 0x0FU);
-            s->gyro_y  = build20(pkt[10], pkt[9],  pkt[18] & 0x0FU);
-            s->gyro_z  = build20(pkt[12], pkt[11], pkt[19] & 0x0FU);
+            s->gyro_x  = build20(pkt[7],  pkt[8],  pkt[17] & 0x0FU);
+            s->gyro_y  = build20(pkt[9],  pkt[10], pkt[18] & 0x0FU);
+            s->gyro_z  = build20(pkt[11], pkt[12], pkt[19] & 0x0FU);
 
             /*
-             * Температура: Little Endian, 2 байта
-             *   pkt[13] = Temp[7:0]  (LSB)
-             *   pkt[14] = Temp[15:8] (MSB)
+             * Температура: Big Endian, 2 байта.
+             *   pkt[13] = Temp[15:8] MSB  ← первым
+             *   pkt[14] = Temp[7:0]  LSB
              * Формула: T[°C] = temp_raw / 128.0f + 25.0f
              */
-            s->temp_raw = (int16_t)(((uint16_t)pkt[14] << 8U) |
-                                     (uint16_t)pkt[13]);
+            s->temp_raw = (int16_t)(((uint16_t)pkt[13] << 8U) |
+                                     (uint16_t)pkt[14]);
 
             /*
-             * Timestamp: Little Endian
-             *   pkt[15] = Timestamp[7:0]  (LSB)
-             *   pkt[16] = Timestamp[15:8] (MSB)
+             * Timestamp: Big Endian.
+             *   pkt[15] = Timestamp[15:8] MSB  ← первым
+             *   pkt[16] = Timestamp[7:0]  LSB
+             * Разрешение: 1 мкс/LSB (TMST_RESOL=0).
+             * Тип uint16_t → диапазон 0..65535 мкс (~65 мс), затем wraparound.
              */
             if ((hdr & FIFO_HDR_TMST_BIT) != 0U)
             {
-                s->timestamp = (uint16_t)(((uint16_t)pkt[16] << 8U) |
-                                           (uint16_t)pkt[15]);
+                s->timestamp = (uint16_t)(((uint16_t)pkt[15] << 8U) |
+                                           (uint16_t)pkt[16]);
             }
             else
             {
