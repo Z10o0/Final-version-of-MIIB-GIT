@@ -9,21 +9,23 @@ extern "C" {
 #include "icm45686_spi.h"
 
 /* ================================================================
- * ICM_Sample_t — один HIRES-семпл из 20-байтного FIFO пакета.
+ * ICM_Sample_t — один 20-байтный HIRES-семпл.
  *
- * Оси: int32_t, 20-битное знаковое значение (sign-extended).
- * Для 16-битной совместимости при передаче через UART используй
- * правый сдвиг: accel_x >> 4 даёт 16-битный эквивалент.
+ * Оси хранятся как int32_t, выровненные по биту 31 (MSB = знак).
+ * Для получения физического 20-битного значения: val = accel_x >> 12
+ * Для перевода в g (при FS=16G): g = (accel_x >> 12) / 32768.0f * 16.0f
+ *
+ * temp_raw: (int8_t)pkt[13] → °C = temp_raw / 2.0f + 25.0f
  * ================================================================ */
 typedef struct {
-    int32_t  accel_x;   /* 20-bit знаковое, в единицах LSB */
+    int32_t  accel_x;
     int32_t  accel_y;
     int32_t  accel_z;
     int32_t  gyro_x;
     int32_t  gyro_y;
     int32_t  gyro_z;
-    int16_t  temp_raw;  /* 16-bit: [19:12] в MSB + [11:4] в LSB → сдвиг вправо на 4 */
-    uint16_t timestamp; /* Timestamp из байт 14-15, единица: ~1/32768 с при внеш. клоке */
+    int16_t  temp_raw;
+    uint16_t timestamp;
 } ICM_Sample_t;
 
 typedef struct {
