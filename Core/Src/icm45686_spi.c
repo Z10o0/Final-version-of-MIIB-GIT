@@ -25,9 +25,6 @@
 #define ICM45686_INT1_STATUS0_RESET_DONE    (1U << 7)
 #define ICM45686_ACCEL_LP_CLK_SEL           (1U << 4)
 
-/* Бит включения HIRES в регистре FIFO_CONFIG3 (бит 4) */
-#define ICM45686_FIFO_HIRES_EN              (1U << 4)
-
 static void    ICM_DelayUs            (uint32_t us);
 static void    ICM_DelayMs            (uint32_t ms);
 static void    ICM_CS_Low             (const ICM_Sensor_t *s);

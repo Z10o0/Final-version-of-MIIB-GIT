@@ -24,14 +24,13 @@ extern "C" {
 /* ============================================================================
  *  FIFO-геометрия
  *  ODR 6400 Гц, TIM6 640 Гц → 10 пакетов за период опроса
- *  Пакет 16-байтный: header(1)+accel(6)+gyro(6)+temp(1)+tmst(2) = 16 байт
+ *  [FIX] Пакет 20-байтный HIRES:
+ *    header(1) + accel(6) + gyro(6) + temp(1) + tmst(2) + hires_nibbles(4) = 20 байт
  * ========================================================================== */
 #define ICM_FIFO_POLL_PACKETS               10U
-#define ICM_FIFO_PACKET_BYTES               ICM45686_FIFO_PACKET_SIZE_16BIT /* 16 */
-#define ICM_FIFO_PAYLOAD_BYTES              (ICM_FIFO_POLL_PACKETS * ICM_FIFO_PACKET_BYTES) /* 160 */
-
-/* +1 байт: адрес FIFO_DATA передаётся первым в SPI-транзакции */
-#define ICM_FIFO_DMA_BUF_SIZE               (ICM_FIFO_PAYLOAD_BYTES + 1U) /* 161 */
+#define ICM_FIFO_PACKET_BYTES               ICM45686_FIFO_PACKET_SIZE_HIRES  /* 20 */
+#define ICM_FIFO_PAYLOAD_BYTES              (ICM_FIFO_POLL_PACKETS * ICM_FIFO_PACKET_BYTES) /* 200 */
+#define ICM_FIFO_DMA_BUF_SIZE               (ICM_FIFO_PAYLOAD_BYTES + 1U)   /* 201 */
 
 #define ICM_FIFO_WATERMARK_PACKETS          ICM_FIFO_POLL_PACKETS          /* 10  */
 #define ICM_FIFO_WATERMARK_BYTES            ICM_FIFO_PAYLOAD_BYTES         /* 160 */

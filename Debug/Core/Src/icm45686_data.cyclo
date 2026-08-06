@@ -1,2 +1,3 @@
-../Core/Src/icm45686_data.c:30:6:ICM_ParseFIFOBuffer	6
-../Core/Src/icm45686_data.c:88:6:ICM_ParseAllFIFO	4
+../Core/Src/icm45686_data.c:61:23:ICM_Build20bit	2
+../Core/Src/icm45686_data.c:76:6:ICM_ParseFIFOBuffer	7
+../Core/Src/icm45686_data.c:160:6:ICM_ParseAllFIFO	4
