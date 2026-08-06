@@ -323,7 +323,6 @@ uint32_t ICM_InitAllSensors(void)
     g_clk_ok_mask       = 0U;
     g_clk_fail_mask     = 0U;
 
-    ICM_DelayMs(3U);
 
     for (bus_idx = 0U; bus_idx < ICM_SPI_BUS_COUNT; bus_idx++)
     {
@@ -459,7 +458,7 @@ uint32_t ICM_InitAllSensors(void)
                          ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN);
 
             /* Минимум 200 мкс для стабилизации PLL после включения (DS-000577 §5) */
-            ICM_DelayMs(5U);
+            ICM_DelayUs(500U);
 
             /* ------------------------------------------------------------------
              * ШАГ 11 [FIX-1]: tmst_en ПОСЛЕ PWR_MGMT0
