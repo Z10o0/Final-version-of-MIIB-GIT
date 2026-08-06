@@ -250,7 +250,7 @@ Discarded input sections
  .debug_macro   0x00000000      0x165 ./Core/Src/icm45686_spi.o
  .debug_macro   0x00000000       0x22 ./Core/Src/icm45686_spi.o
  .debug_macro   0x00000000      0x2a0 ./Core/Src/icm45686_spi.o
- .debug_macro   0x00000000       0x6a ./Core/Src/icm45686_spi.o
+ .debug_macro   0x00000000       0x70 ./Core/Src/icm45686_spi.o
  .debug_macro   0x00000000       0x16 ./Core/Src/icm45686_spi.o
  .debug_macro   0x00000000       0x3c ./Core/Src/icm45686_spi.o
  .debug_macro   0x00000000       0x20 ./Core/Src/icm45686_spi.o
@@ -371,7 +371,7 @@ Discarded input sections
  .debug_macro   0x00000000      0x165 ./Core/Src/main.o
  .debug_macro   0x00000000       0x22 ./Core/Src/main.o
  .debug_macro   0x00000000      0x2a0 ./Core/Src/main.o
- .debug_macro   0x00000000       0x6a ./Core/Src/main.o
+ .debug_macro   0x00000000       0x70 ./Core/Src/main.o
  .group         0x00000000        0xc ./Core/Src/stm32h7xx_it.o
  .group         0x00000000        0xc ./Core/Src/stm32h7xx_it.o
  .group         0x00000000        0xc ./Core/Src/stm32h7xx_it.o
@@ -491,7 +491,7 @@ Discarded input sections
  .debug_macro   0x00000000      0x165 ./Core/Src/stm32h7xx_it.o
  .debug_macro   0x00000000       0x22 ./Core/Src/stm32h7xx_it.o
  .debug_macro   0x00000000      0x2a0 ./Core/Src/stm32h7xx_it.o
- .debug_macro   0x00000000       0x6a ./Core/Src/stm32h7xx_it.o
+ .debug_macro   0x00000000       0x70 ./Core/Src/stm32h7xx_it.o
  .debug_macro   0x00000000       0x40 ./Core/Src/stm32h7xx_it.o
  .group         0x00000000        0xc ./Core/Src/syscalls.o
  .group         0x00000000        0xc ./Core/Src/syscalls.o
@@ -888,7 +888,7 @@ Discarded input sections
  .debug_macro   0x00000000      0x165 ./Core/Src/uart_telemetry.o
  .debug_macro   0x00000000       0x22 ./Core/Src/uart_telemetry.o
  .debug_macro   0x00000000      0x2a0 ./Core/Src/uart_telemetry.o
- .debug_macro   0x00000000       0x6a ./Core/Src/uart_telemetry.o
+ .debug_macro   0x00000000       0x70 ./Core/Src/uart_telemetry.o
  .debug_macro   0x00000000       0x40 ./Core/Src/uart_telemetry.o
  .debug_macro   0x00000000       0x16 ./Core/Src/uart_telemetry.o
  .debug_macro   0x00000000       0x3c ./Core/Src/uart_telemetry.o
@@ -3400,7 +3400,7 @@ LOAD C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.exte
  .debug_rnglists
                 0x00000b66      0x10e ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_utils.o
 
-.debug_macro    0x00000000    0x2c00a
+.debug_macro    0x00000000    0x2c010
  .debug_macro   0x00000000      0x2ae ./Core/Src/icm45686_data.o
  .debug_macro   0x000002ae      0xb26 ./Core/Src/icm45686_data.o
  .debug_macro   0x00000dd4       0x22 ./Core/Src/icm45686_data.o
@@ -3451,27 +3451,27 @@ LOAD C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.exte
  .debug_macro   0x0002838d      0x165 ./Core/Src/icm45686_data.o
  .debug_macro   0x000284f2       0x22 ./Core/Src/icm45686_data.o
  .debug_macro   0x00028514      0x2a0 ./Core/Src/icm45686_data.o
- .debug_macro   0x000287b4       0x6a ./Core/Src/icm45686_data.o
- .debug_macro   0x0002881e       0x16 ./Core/Src/icm45686_data.o
- .debug_macro   0x00028834       0x3c ./Core/Src/icm45686_data.o
- .debug_macro   0x00028870       0x20 ./Core/Src/icm45686_data.o
- .debug_macro   0x00028890      0x28a ./Core/Src/icm45686_spi.o
- .debug_macro   0x00028b1a      0x273 ./Core/Src/main.o
- .debug_macro   0x00028d8d       0x40 ./Core/Src/main.o
- .debug_macro   0x00028dcd      0x279 ./Core/Src/stm32h7xx_it.o
- .debug_macro   0x00029046      0x182 ./Core/Src/system_stm32h7xx.o
- .debug_macro   0x000291c8      0x29f ./Core/Src/uart_telemetry.o
- .debug_macro   0x00029467      0x10e ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_gpio.o
- .debug_macro   0x00029575      0x15f ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_gpio.o
- .debug_macro   0x000296d4      0x1b8 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_rcc.o
- .debug_macro   0x0002988c      0x9c0 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_rcc.o
- .debug_macro   0x0002a24c      0x27b ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_spi.o
- .debug_macro   0x0002a4c7      0x62b ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_spi.o
- .debug_macro   0x0002aaf2      0x183 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_tim.o
- .debug_macro   0x0002ac75      0xa9d ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_tim.o
- .debug_macro   0x0002b712      0x1fd ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
- .debug_macro   0x0002b90f      0x409 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
- .debug_macro   0x0002bd18      0x2f2 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_utils.o
+ .debug_macro   0x000287b4       0x70 ./Core/Src/icm45686_data.o
+ .debug_macro   0x00028824       0x16 ./Core/Src/icm45686_data.o
+ .debug_macro   0x0002883a       0x3c ./Core/Src/icm45686_data.o
+ .debug_macro   0x00028876       0x20 ./Core/Src/icm45686_data.o
+ .debug_macro   0x00028896      0x28a ./Core/Src/icm45686_spi.o
+ .debug_macro   0x00028b20      0x273 ./Core/Src/main.o
+ .debug_macro   0x00028d93       0x40 ./Core/Src/main.o
+ .debug_macro   0x00028dd3      0x279 ./Core/Src/stm32h7xx_it.o
+ .debug_macro   0x0002904c      0x182 ./Core/Src/system_stm32h7xx.o
+ .debug_macro   0x000291ce      0x29f ./Core/Src/uart_telemetry.o
+ .debug_macro   0x0002946d      0x10e ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_gpio.o
+ .debug_macro   0x0002957b      0x15f ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_gpio.o
+ .debug_macro   0x000296da      0x1b8 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_rcc.o
+ .debug_macro   0x00029892      0x9c0 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_rcc.o
+ .debug_macro   0x0002a252      0x27b ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_spi.o
+ .debug_macro   0x0002a4cd      0x62b ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_spi.o
+ .debug_macro   0x0002aaf8      0x183 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_tim.o
+ .debug_macro   0x0002ac7b      0xa9d ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_tim.o
+ .debug_macro   0x0002b718      0x1fd ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
+ .debug_macro   0x0002b915      0x409 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_usart.o
+ .debug_macro   0x0002bd1e      0x2f2 ./Drivers/STM32H7xx_HAL_Driver/Src/stm32h7xx_ll_utils.o
 
 .debug_line     0x00000000     0xaf59
  .debug_line    0x00000000      0x9e0 ./Core/Src/icm45686_data.o

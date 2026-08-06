@@ -56,6 +56,8 @@ extern "C" {
 #define ICM_PWR_MGMT0_MASK \
     (ICM45686_PWR_GYRO_MODE_LN | ICM45686_PWR_ACCEL_MODE_LN)
 
+#define ICM_TOTAL_SENSORS   (ICM_SPI_BUS_COUNT * ICM_SENSORS_PER_BUS)  /* 18 */
+
 #ifdef __cplusplus
 }
 #endif
