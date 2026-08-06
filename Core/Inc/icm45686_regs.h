@@ -200,7 +200,7 @@ extern "C" {
  *  byte  14    = Timestamp LSB
  *  byte  15    = Timestamp MSB
  * ========================================================================== */
-#define ICM45686_FIFO_PACKET_SIZE_16BIT     16U
+#define ICM45686_FIFO_PACKET_SIZE_16BIT     20U
 #define ICM45686_FIFO_PACKET_SIZE_HIRES     20U
 
 /* ============================================================================
