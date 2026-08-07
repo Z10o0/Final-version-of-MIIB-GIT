@@ -16,10 +16,10 @@ extern "C" {
 /* ============================================================================
  *  ODR и FSR — 6400 Гц
  * ========================================================================== */
-#define ICM_GYRO_ODR_VALUE                  ICM45686_GYRO_ODR_6400HZ   /* 0x03 */
-#define ICM_ACCEL_ODR_VALUE                 ICM45686_ACCEL_ODR_6400HZ  /* 0x03 */
-#define ICM_GYRO_FS_VALUE                   ICM45686_GYRO_FS_2000DPS   /* 0x10 */
-#define ICM_ACCEL_FS_VALUE                  ICM45686_ACCEL_FS_16G      /* 0x10 */
+#define ICM_GYRO_ODR_VALUE                  ICM45686_GYRO_ODR_1600HZ   /* 0x03 */
+#define ICM_ACCEL_ODR_VALUE                 ICM45686_ACCEL_ODR_1600HZ  /* 0x03 */
+#define ICM_GYRO_FS_VALUE                   ICM45686_GYRO_FS_4000DPS   /* 0x10 */
+#define ICM_ACCEL_FS_VALUE                  ICM45686_ACCEL_FS_32G      /* 0x10 */
 
 /* ============================================================================
  *  FIFO-геометрия
@@ -27,7 +27,7 @@ extern "C" {
  *  [FIX] Пакет 20-байтный HIRES:
  *    header(1) + accel(6) + gyro(6) + temp(1) + tmst(2) + hires_nibbles(4) = 20 байт
  * ========================================================================== */
-#define ICM_FIFO_POLL_PACKETS               10U
+#define ICM_FIFO_POLL_PACKETS               1U
 #define ICM_FIFO_PACKET_BYTES               ICM45686_FIFO_PACKET_SIZE_HIRES  /* 20 */
 #define ICM_FIFO_PAYLOAD_BYTES              (ICM_FIFO_POLL_PACKETS * ICM_FIFO_PACKET_BYTES) /* 200 */
 #define ICM_FIFO_DMA_BUF_SIZE               (ICM_FIFO_PAYLOAD_BYTES + 1U)   /* 201 */
@@ -38,7 +38,7 @@ extern "C" {
 /* ============================================================================
  *  Частота поллинга TIM6: 6400 / 10 = 640 Гц
  * ========================================================================== */
-#define ICM_POLL_RATE_HZ                    640U
+#define ICM_POLL_RATE_HZ                    1600U
 
 /* ============================================================================
  *  Готовые маски для записи в регистры
