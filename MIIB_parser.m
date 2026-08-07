@@ -13,7 +13,7 @@ clc
 
 %% CONFIG
 PORT      = 'COM3';
-BAUD      = 10000000;
+BAUD      = 5000000;
 N_SENSORS = 18;
 PKT_TOTAL = 518;
 PAYLOAD_N = 512;
