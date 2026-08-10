@@ -1,21 +1,55 @@
 % =========================================================================
-% MIIB_parser.m  —  ICM-45686 UART телеметрия  v5
-% v5: новый wire-формат 348 байт, 19-byte HIRES блоки, uint16 counter,
-%     удалён sensor_mask и footer, добавлен unpack20, modulo-65536 counter.
+% MIIB_parser.m  —  ICM-45686 UART телеметрия  v7
+% v7: адаптация под новый прошивочный протокол (100 Гц UART, 16 FIFO-
+%     пакетов/цикл на стороне MCU) + строгое разделение фаз:
+%
+%     ФАЗА 1 (ПРИЁМ):     ТОЛЬКО накопление сырых байт в буфер.
+%                         Никакого парсинга, поиска заголовков, CRC,
+%                         построения матриц — вообще никакой обработки.
+%                         Callback лишь копирует байты из драйвера в RAM.
+%
+%     ФАЗА 2 (ОБРАБОТКА): Запускается ПОСЛЕ полной остановки приёма
+%                         (delete(s) уже выполнен, порт закрыт).
+%                         Парсинг, CRC, сборка матриц, статистика, графики.
+%
+%     Такое разделение убирает саму возможность просадки приёма из-за
+%     "тяжёлых" операций (regexp/find/CRC) внутри callback — единственная
+%     работа callback'а теперь swap буфера, что занимает микросекунды
+%     независимо от сложности протокола.
+%
+%     Также обновлены протокольные константы под новую прошивку:
+%       FRAME_HZ 1600 → 100   (частота UART-кадров, TIM6 @ 100 Гц)
+%       ODR_HZ    остаётся 1600 (частота ODR датчика, не менялась)
+%       SAMPLES_PER_ICM_READ = 16 — количество HIRES FIFO-пакетов,
+%                 накопленных MCU за один цикл опроса (только для
+%                 справки/документации: UART передаёт один — самый
+%                 свежий — сэмпл на кадр, как и раньше).
+%       expected_delta_us — исправлена формула: она относится к дельте
+%                 hardware-timestamp МЕЖДУ ПОСЛЕДОВАТЕЛЬНЫМИ FIFO-
+%                 сэмплами внутри датчика (ODR=1600 Гц → ~625 мкс),
+%                 а НЕ к периоду UART-кадра. Множитель "10" в v6 был
+%                 привязан к старой (уже не актуальной) геометрии батча
+%                 и убран.
 % =========================================================================
 close all; clearvars; clc;
 
 %% ── CONFIG ───────────────────────────────────────────────────────────────
 PORT        = 'COM3';
-BAUD        = 8100000;      % должно совпадать с USART1 в MCU
-BUF_SIZE    = 32 * 1024 * 1024;
+BAUD        = 8100000;      % должно совпадать с USART1 в MCU (8.1 Мбод)
+                             % ЕСЛИ мост FT232H/FT2232H — проверь реально
+                             % достижимый custom baud (может округляться
+                             % драйвером).
+BUF_SIZE    = 8 * 1024 * 1024;   % при 100 Гц x 348 байт = 34.8 КБ/с
+                                  % запас под TIMEOUT_S=60 c с большим
+                                  % запасом; можно уменьшить.
 TIMEOUT_S   = 20;
 N_SENSORS   = 18;
-PKT_TOTAL   = 348;          % новый размер пакета
-FRAME_HZ    = 1600;
-SENS_A      = 16384.0;      % LSB/g   при FS=16g   (не менять!)
-SENS_G      = 131.072;      % LSB/dps при FS=2000dps (не менять!)
-ODR_HZ      = 1600;         % ODR датчика → ожидаемая дельта timestamp
+PKT_TOTAL   = 348;           % размер UART-кадра не менялся
+FRAME_HZ    = 100;           % было 1600 → теперь 100 (TIM6 @ 100 Гц)
+SAMPLES_PER_ICM_READ = 16;   % справочно: пакетов FIFO на цикл опроса MCU
+SENS_A      = 16384.0;       % LSB/g   при FS=16g   (не менять!)
+SENS_G      = 131.072;       % LSB/dps при FS=2000dps (не менять!)
+ODR_HZ      = 1600;          % ODR датчика (не менялась)
 
 %% ── ОТКРЫТИЕ ПОРТА ───────────────────────────────────────────────────────
 s = serialport(PORT, BAUD, 'Timeout', TIMEOUT_S + 2);
@@ -23,27 +57,68 @@ s.InputBufferSize = BUF_SIZE;
 flush(s);
 fprintf('Listening on %s @ %d baud for %d s...\n', PORT, BAUD, TIMEOUT_S);
 
-%% ── ЗАХВАТ ───────────────────────────────────────────────────────────────
-raw   = uint8([]);
+%% ── ФАЗА 1: ЧИСТЫЙ ПРИЁМ (без какой-либо обработки) ──────────────────────
+% chunk_store — cell-массив кусков; склейка в один uint8-вектор делается
+% ОДИН раз после остановки приёма (в начале ФАЗЫ 2), не раньше.
+%
+% Внутри local_capture() нет НИЧЕГО, кроме read() — ни поиска заголовков,
+% ни проверки CRC, ни malloc'ов сверх предвыделенной ячейки. Это и есть
+% "легковесность": единственная работа во время приёма — скопировать
+% байты из драйверного буфера в RAM.
+chunk_store = cell(50000, 1);   % с запасом; при 100 Гц кадров/callback
+                                 % событий на порядки меньше, чем было
+                                 % на 1600 Гц, запас 50000 более чем
+                                 % достаточен даже для TIMEOUT_S=600 c.
+chunk_count = 0;
+
+configureCallback(s, "byte", PKT_TOTAL, @(src, ~) local_capture(src));
+
+    function local_capture(src)
+        n = src.NumBytesAvailable;
+        if n > 0
+            chunk_count = chunk_count + 1;
+            chunk_store{chunk_count} = read(src, n, 'uint8');
+        end
+    end
+
 t_cap = tic;
 while toc(t_cap) < TIMEOUT_S
-    n = s.NumBytesAvailable;
-    if n >= PKT_TOTAL
-        chunk = read(s, n, 'uint8');
-        raw   = [raw; chunk(:)]; %#ok<AGROW>
-    end
-    pause(0.005);
+    % Только отдаём управление event loop для доставки callback'ов.
+    % Никакой парсинг сюда переносить нельзя — иначе теряется весь
+    % смысл разделения фаз.
+    drawnow limitrate;
 end
-delete(s);
+
+configureCallback(s, "off");
+
+% Финальный вычит остатка буфера (данные, накопленные между последним
+% callback и остановкой) — тоже часть ФАЗЫ 1, обработки здесь ещё нет.
+n_tail = s.NumBytesAvailable;
+if n_tail > 0
+    chunk_count = chunk_count + 1;
+    chunk_store{chunk_count} = read(s, n_tail, 'uint8');
+end
+
+delete(s);   % порт закрыт — приём гарантированно завершён
+
+% ── ГРАНИЦА ФАЗ ───────────────────────────────────────────────────────────
+% Всё, что выше этой строки, относится ТОЛЬКО к приёму.
+% Всё, что ниже, выполняется ИСКЛЮЧИТЕЛЬНО после его завершения.
+% ───────────────────────────────────────────────────────────────────────
+
+raw = vertcat(chunk_store{1:chunk_count});
+raw = uint8(raw(:));
+clear chunk_store;   % освобождаем память, дальше работаем с raw
 
 expected_bytes = round(FRAME_HZ * TIMEOUT_S * PKT_TOTAL);
 fprintf('Received %d bytes (expected ~%d = %.1f%%)\n', ...
     numel(raw), expected_bytes, numel(raw)/expected_bytes*100);
+
 if numel(raw) < PKT_TOTAL
     error('Слишком мало данных (%d байт).', numel(raw));
 end
 
-%% ── ДИАГНОСТИКА ──────────────────────────────────────────────────────────
+%% ── ДИАГНОСТИКА (ФАЗА 2) ─────────────────────────────────────────────────
 fprintf('\n--- ДИАГНОСТИКА ---\n');
 fprintf('0xAA в буфере: %d\n', sum(raw == uint8(hex2dec('AA'))));
 fprintf('0x55 в буфере: %d\n', sum(raw == uint8(hex2dec('55'))));
@@ -51,50 +126,46 @@ fprintf('First 40 bytes: ');
 fprintf('%02X ', raw(1:min(40,end)));
 fprintf('\n\n');
 
-%% ── ПАРСИНГ ──────────────────────────────────────────────────────────────
+%% ── ПАРСИНГ (векторизованный поиск заголовков) ───────────────────────────
 % Структура пакета (MATLAB индексы 1-based):
 %   pkt(1..2)    : header 0xAA 0x55
 %   pkt(3..346)  : payload = frame_counter(2) + 18*19 bytes  ← CRC по нему
 %   pkt(347..348): CRC16 LE
+n_raw = numel(raw);
 
-frames     = struct('counter',{},'samples',{});
-idx        = 1;
-n_raw      = numel(raw);
-bad_crc    = 0;
-hdr_hits   = 0;
+is_aa   = (raw(1:end-1) == uint8(hex2dec('AA')));
+is_55   = (raw(2:end)   == uint8(hex2dec('55')));
+hdr_pos = find(is_aa & is_55);   % позиции начала потенциальных заголовков
 
-while idx <= n_raw - PKT_TOTAL + 1
-    % Поиск заголовка 0xAA 0x55
-    rel = find(raw(idx:end-1) == uint8(hex2dec('AA')) & ...
-               raw(idx+1:end) == uint8(hex2dec('55')), 1);
-    if isempty(rel), break; end
-    idx = idx + rel - 1;
-    if idx + PKT_TOTAL - 1 > n_raw, break; end
+frames   = struct('counter', {}, 'samples', {});
+bad_crc  = 0;
+hdr_hits = numel(hdr_pos);
+last_end = 0;   % конец предыдущего успешно распарсенного пакета
 
-    hdr_hits = hdr_hits + 1;
+for k = 1:hdr_hits
+    idx = hdr_pos(k);
+    if idx <= last_end
+        continue;   % этот заголовок уже внутри предыдущего валидного пакета
+    end
+    if idx + PKT_TOTAL - 1 > n_raw
+        break;
+    end
+
     pkt = raw(idx : idx + PKT_TOTAL - 1);
-
-    % Проверка CRC16 по payload bytes [3..346] (MATLAB 1-based)
-    % = UART bytes [2..345] (0-based), 344 байта
     payload  = pkt(3:346);
     crc_rx   = bitor(uint16(pkt(347)), bitshift(uint16(pkt(348)), 8));
     crc_calc = crc16ccitt(payload);
+
     if crc_calc ~= crc_rx
         bad_crc = bad_crc + 1;
-        idx = idx + 1;
         continue;
     end
 
-    % frame_counter: uint16 LE из payload(1:2)
     f.counter = typecast(uint8(payload(1:2)), 'uint16');
-
     samp = nan(N_SENSORS, 8);
-    for sid = 1:N_SENSORS
-        % Начало 19-byte блока датчика в payload (MATLAB 1-based):
-        %   b = 3 + (sid-1)*19
-        b = 3 + (sid - 1) * 19;
 
-        % Восстановление 6 осей с полным 20-bit разрешением
+    for sid = 1:N_SENSORS
+        b = 3 + (sid - 1) * 19;
         ax_r = unpack20(payload(b),    payload(b+1),  bitshift(uint8(payload(b+16)), -4));
         ay_r = unpack20(payload(b+2),  payload(b+3),  bitshift(uint8(payload(b+17)), -4));
         az_r = unpack20(payload(b+4),  payload(b+5),  bitshift(uint8(payload(b+18)), -4));
@@ -102,11 +173,9 @@ while idx <= n_raw - PKT_TOTAL + 1
         gy_r = unpack20(payload(b+8),  payload(b+9),  bitand(uint8(payload(b+17)), uint8(15)));
         gz_r = unpack20(payload(b+10), payload(b+11), bitand(uint8(payload(b+18)), uint8(15)));
 
-        % temp_raw: Big Endian → int16
         tr_u = bitor(bitshift(uint16(payload(b+12)), 8), uint16(payload(b+13)));
         tr   = typecast(tr_u, 'int16');
 
-        % timestamp: Big Endian → uint16
         ts = bitor(bitshift(uint16(payload(b+14)), 8), uint16(payload(b+15)));
 
         samp(sid,:) = [
@@ -119,9 +188,10 @@ while idx <= n_raw - PKT_TOTAL + 1
             double(tr)   / 128.0 + 25.0,
             double(ts) ];
     end
+
     f.samples = samp;
     frames(end+1) = f; %#ok<AGROW>
-    idx = idx + PKT_TOTAL;
+    last_end = idx + PKT_TOTAL - 1;
 end
 
 fprintf('Header hits  : %d\n', hdr_hits);
@@ -137,9 +207,6 @@ end
 
 %% ── СБОРКА МАТРИЦ ────────────────────────────────────────────────────────
 nF = numel(frames);
-
-% frame_counter — uint16, переполнение через 65536/1600 = 40.96 с.
-% Строим временную ось через накопленные modulo-разности.
 ctr_raw = zeros(nF, 1, 'uint16');
 for fi = 1:nF
     ctr_raw(fi) = frames(fi).counter;
@@ -211,26 +278,27 @@ for sid = 1:N_SENSORS
 end
 
 %% ── СТАТИСТИКА TIMESTAMP ─────────────────────────────────────────────────
-expected_delta_us = 10 * 1e6 / ODR_HZ;
-
+% [ИЗМЕНЕНИЕ v7] expected_delta_us теперь = 1e6/ODR_HZ (без множителя 10).
+% Это дельта hardware-timestamp МЕЖДУ ПОСЛЕДОВАТЕЛЬНЫМИ FIFO-сэмплами
+% ВНУТРИ датчика (ODR=1600 Гц), НЕ период UART-кадра (100 Гц). UART
+% передаёт только последний (самый свежий) из 16 накопленных FIFO-
+% сэмплов, поэтому ts_ отражает именно межсэмпловый интервал на 1600 Гц.
+expected_delta_us = 1e6 / ODR_HZ;
 fprintf('\n--- TIMESTAMP (raw uint16, 1 мкс/LSB, DELTA-режим) ---\n');
-fprintf('Ожидаемая дельта при ODR=%d Гц, 10 сэмплов/батч: %.1f мкс\n', ...
+fprintf('Ожидаемая дельта при ODR=%d Гц (межсэмпловая, не межкадровая): %.1f мкс\n', ...
     ODR_HZ, expected_delta_us);
 fprintf('%-6s  %-8s  %-8s  %-8s  %-8s  %-10s  %-8s\n', ...
     'Sensor','Mean,мкс','Std,мкс','Min','Max','Ненул,%','Статус');
 fprintf('%s\n', repmat('-',1,72));
-
 for sid = 1:N_SENSORS
     col = ts_(:, sid);
     nv  = sum(~isnan(col));
     if nv == 0, continue; end
-
     nz_pct   = sum(col(~isnan(col)) ~= 0) / nv * 100;
     ts_mean  = mean(col, 'omitnan');
     ts_std   = std(col,  'omitnan');
     ts_min   = min(col,  [], 'omitnan');
     ts_max   = max(col,  [], 'omitnan');
-
     if nz_pct < 1.0
         status = 'TMST=0 (нет бита)';
     elseif abs(ts_mean - expected_delta_us) < 0.15 * expected_delta_us
@@ -238,7 +306,6 @@ for sid = 1:N_SENSORS
     else
         status = sprintf('? delta=%.0f мкс', ts_mean);
     end
-
     fprintf('S%02d    %8.1f  %8.2f  %8.0f  %8.0f  %9.1f%%  %s\n', ...
         sid-1, ts_mean, ts_std, ts_min, ts_max, nz_pct, status);
 end
@@ -291,18 +358,7 @@ fprintf('\nГотово: %d фреймов, %.2f с, ~%.1f Гц\n', ...
     nF, t(end), nF/max(t(end),1e-9));
 
 %% ── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ─────────────────────────────────────────────
-
 function x = unpack20(msb, lsb, nibble)
-    % Восстановление signed 20-bit значения из трёх частей.
-    %
-    % msb    — старший байт оси (биты 19..12), uint8
-    % lsb    — следующий байт  (биты 11..4),   uint8
-    % nibble — младшие 4 бита  (биты 3..0),    uint8 (уже сдвинут)
-    %
-    % Сборка беззнакового 20-bit числа:
-    %   u = msb<<12 | lsb<<4 | nibble
-    % Знаковый бит — бит 19 (hex 0x80000).
-    % Если выставлен — число отрицательное: x = u - 0x100000.
     u = bitor(bitshift(uint32(msb), 12), ...
               bitor(bitshift(uint32(lsb), 4), uint32(nibble)));
     if bitand(u, uint32(hex2dec('80000'))) ~= 0
