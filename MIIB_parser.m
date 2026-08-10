@@ -6,9 +6,9 @@ close all; clearvars; clc;
 
 %% ── CONFIG ───────────────────────────────────────────────────────────────
 PORT        = 'COM3';
-BAUD        = 9216000;
-BUF_SIZE    = 16 * 1024 * 1024;
-TIMEOUT_S   = 10;
+BAUD        = 8000000;
+BUF_SIZE    = 32 * 1024 * 1024;
+TIMEOUT_S   = 20;
 N_SENSORS   = 18;
 PKT_TOTAL   = 518;
 FRAME_HZ    = 1600;

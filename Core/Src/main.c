@@ -357,7 +357,7 @@ static void MX_SPI1_Init(void)
   SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
   SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV4;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -686,7 +686,7 @@ static void MX_SPI4_Init(void)
   SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
   SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV4;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -789,7 +789,7 @@ static void MX_SPI5_Init(void)
   SPI_InitStruct.ClockPolarity   = LL_SPI_POLARITY_LOW;    // CPOL=0
   SPI_InitStruct.ClockPhase      = LL_SPI_PHASE_1EDGE;     // CPHA=0
   SPI_InitStruct.NSS = LL_SPI_NSS_SOFT;
-  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV4;
+  SPI_InitStruct.BaudRate = LL_SPI_BAUDRATEPRESCALER_DIV2;
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
@@ -1060,7 +1060,7 @@ static void MX_USART1_UART_Init(void)
 
   /* USER CODE END USART1_Init 1 */
   USART_InitStruct.PrescalerValue = LL_USART_PRESCALER_DIV1;
-  USART_InitStruct.BaudRate = 9216000;
+  USART_InitStruct.BaudRate = 8000000;
   USART_InitStruct.DataWidth = LL_USART_DATAWIDTH_8B;
   USART_InitStruct.StopBits = LL_USART_STOPBITS_1;
   USART_InitStruct.Parity = LL_USART_PARITY_NONE;
