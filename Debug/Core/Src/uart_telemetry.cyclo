@@ -9,8 +9,9 @@
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_dma.h:3014:22:LL_DMA_EnableIT_TC	1
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h:4150:22:LL_USART_EnableDMAReq_TX	2
 ../Drivers/STM32H7xx_HAL_Driver/Inc/stm32h7xx_ll_usart.h:4220:26:LL_USART_DMA_GetRegAddr	2
-../Core/Src/uart_telemetry.c:54:17:CRC16_CCITT	4
-../Core/Src/uart_telemetry.c:80:13:BuildSyncFrame	4
-../Core/Src/uart_telemetry.c:109:6:UART_Telemetry_Init	1
-../Core/Src/uart_telemetry.c:133:6:UART_BuildAndSendSyncFrame	3
-../Core/Src/uart_telemetry.c:182:6:UART_DMA_TxComplete	1
+../Core/Src/uart_telemetry.c:51:17:CRC16_CCITT	4
+../Core/Src/uart_telemetry.c:77:24:UART_ToU20	1
+../Core/Src/uart_telemetry.c:98:13:UART_PackIMU19	1
+../Core/Src/uart_telemetry.c:141:6:UART_Telemetry_Init	1
+../Core/Src/uart_telemetry.c:174:6:UART_BuildAndSendSyncFrame	7
+../Core/Src/uart_telemetry.c:249:6:UART_DMA_TxComplete	1
