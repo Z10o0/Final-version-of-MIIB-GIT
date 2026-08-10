@@ -1,141 +1,207 @@
 /**
- * @file    icm45686_data.c
- * @brief   Разбор FIFO-пакетов ICM-45686 (16-бит режим).
+ * @file icm45686_data.c
  *
- *          Формат пакета (ICM45686_FIFO_PACKET_SIZE_16BIT = 16 байт):
- *          Байт  Содержимое
- *           0    Header
- *           1    Accel X MSB
- *           2    Accel X LSB
- *           3    Accel Y MSB
- *           4    Accel Y LSB
- *           5    Accel Z MSB
- *           6    Accel Z LSB
- *           7    Gyro X MSB
- *           8    Gyro X LSB
- *           9    Gyro Y MSB
- *          10    Gyro Y LSB
- *          11    Gyro Z MSB
- *          12    Gyro Z LSB
- *          13    Temperature
- *          14    Timestamp LSB
- *          15    Timestamp MSB
+ * ICM-45686 FIFO 20-byte HIRES parser
+ * Строго по даташиту DS-000577 §6.1 + SREGDATAENDIANSEL=1 (Big Endian).
  *
- *          Первые 2 байта RX-буфера DMA — служебные (адрес+dummy),
- *          поэтому данные начинаются с offset +1 от начала g_fifo_data[b][s].
+ * ВАЖНО: датчик настроен в Big Endian (IREG 0xA267 bit1 = 1).
+ * В Big Endian MSB-байт идёт ПЕРВЫМ в паре.
  *
- *          Неисправные датчики (g_sensor_fault_mask):
- *          ICM_ParseAllFIFO() записывает нули во все поля g_sensor_batches
- *          для таких датчиков и выставляет count = 0.
- *          ПК-сторона видит нулевые данные и может определить fault
- *          по count == 0 или по маске в заголовке пакета.
+ * Layout 20-byte пакета в Big Endian:
+ *   Byte 0:  Header
+ *   Byte 1:  Ax[19:12] MSB
+ *   Byte 2:  Ax[11:4]  LSB
+ *   Byte 3:  Ay[19:12] MSB
+ *   Byte 4:  Ay[11:4]  LSB
+ *   Byte 5:  Az[19:12] MSB
+ *   Byte 6:  Az[11:4]  LSB
+ *   Byte 7:  Gx[19:12] MSB
+ *   Byte 8:  Gx[11:4]  LSB
+ *   Byte 9:  Gy[19:12] MSB
+ *   Byte 10: Gy[11:4]  LSB
+ *   Byte 11: Gz[19:12] MSB
+ *   Byte 12: Gz[11:4]  LSB
+ *   Byte 13: Temp[15:8]      MSB
+ *   Byte 14: Temp[7:0]       LSB
+ *   Byte 15: Timestamp[15:8] MSB
+ *   Byte 16: Timestamp[7:0]  LSB
+ *   Byte 17: Ax[3:0](hi nibble) | Gx[3:0](lo nibble)
+ *   Byte 18: Ay[3:0](hi nibble) | Gy[3:0](lo nibble)
+ *   Byte 19: Az[3:0](hi nibble) | Gz[3:0](lo nibble)
+ *
+ * Сборка 20-bit знакового:
+ *   raw = (MSB_byte << 12) | (LSB_byte << 4) | nibble
+ *   sign-extend: (raw << 12) >> 12
+ *
+ * ------------------------------------------------------------------
+ * [ИЗМЕНЕНИЯ для батч-режима 16 пакетов/опрос @ 100 Гц]
+ *
+ * ICM_ParseFIFOBuffer() логику не меняли: она уже была написана как
+ * цикл "while (offset + 20 <= buf_len)" с ограничением
+ * "n < ICM_FIFO_POLL_PACKETS", то есть уже умела разбирать несколько
+ * пакетов подряд. Раньше ICM_FIFO_POLL_PACKETS был 1, теперь 16 —
+ * функция автоматически разбирает все 16 пакетов без правок кода.
+ *
+ * buf_len, который передаёт ICM_ParseAllFIFO(), теперь равен
+ * (ICM_FIFO_DMA_BUF_SIZE - 1) = 320 байт вместо прежних 20 байт —
+ * это тоже обеспечивается автоматически через define в
+ * icm45686_config.h, без изменений в этом файле.
+ * ------------------------------------------------------------------
  */
 
+#include <string.h>
 #include "icm45686_data.h"
 #include "icm45686_spi.h"
 #include "icm45686_regs.h"
-#include <string.h>
 
-/* ================================================================
- * Глобальный массив результатов: по одному ICM_SensorBatch_t на датчик
- * ================================================================ */
+#define FIFO_HDR_MSG_BIT    (1U << 7)
+#define FIFO_HDR_ACCEL_BIT  (1U << 6)
+#define FIFO_HDR_GYRO_BIT   (1U << 5)
+#define FIFO_HDR_HIRES_BIT  (1U << 4)
+#define FIFO_HDR_TMST_BIT   (1U << 3)
+
 ICM_SensorBatch_t g_sensor_batches[ICM_TOTAL_SENSORS];
 
-/* ================================================================
- * ICM_ParseFIFOBuffer — разбор буфера одного ИСПРАВНОГО датчика
- * ================================================================ */
-void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
-                         uint16_t       buf_len,
-                         ICM_SensorBatch_t *batch)
+/**
+ * build20 — сборка 20-bit знакового числа из трёх компонентов.
+ *
+ * @param msb    байт [19:12] — старший байт (первый в BE-пакете)
+ * @param lsb    байт [11:4]  — младший байт (второй в BE-пакете)
+ * @param nibble биты [3:0]   — из byte17/18/19, уже >>4 или &0x0F
+ */
+static inline int32_t build20(uint8_t msb, uint8_t lsb, uint8_t nibble)
 {
-    uint16_t offset  = 0U;
-    uint8_t  pkt_cnt = 0U;
-    uint8_t  header;
+    int32_t raw = ((int32_t)(uint32_t)msb  << 12) |
+                  ((int32_t)(uint32_t)lsb  << 4)  |
+                  (int32_t)(uint32_t)(nibble & 0x0FU);
+    /* sign-extend с позиции бит19 */
+    return (raw << 12) >> 12;
+}
+
+/**
+ * ICM_ParseFIFOBuffer — разобрать все валидные HIRES-пакеты из
+ * непрерывного буфера FIFO одного датчика.
+ *
+ * @param raw_buf указатель на первый байт payload (после cmd/addr байта)
+ * @param buf_len длина payload в байтах (кратно 20; при batch=16 → 320)
+ * @param batch   куда записать результат (samples[] + count)
+ */
+void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
+                          uint16_t buf_len,
+                          ICM_SensorBatch_t *batch)
+{
+    uint16_t offset = 0U;
+    uint8_t  n = 0U;
     const uint8_t *pkt;
+    uint8_t hdr;
 
     batch->count = 0U;
 
-    while ((offset + (uint16_t)ICM45686_FIFO_PACKET_SIZE_16BIT) <= buf_len)
+    while ((uint16_t)(offset + 20U) <= buf_len)
     {
-        pkt    = &raw_buf[offset];
-        header = pkt[0];
+        pkt = &raw_buf[offset];
+        hdr = pkt[0];
 
-        /* Проверка валидности: хотя бы гироскоп или акселерометр */
-        if (((header & ICM45686_FIFO_HEADER_ACCEL_BIT) != 0U) ||
-            ((header & ICM45686_FIFO_HEADER_GYRO_BIT)  != 0U))
+        /* MSG-пакет: маркер конца FIFO / служебный, пропускаем данные */
+        if ((hdr & FIFO_HDR_MSG_BIT) != 0U)
         {
-            if (pkt_cnt < ICM_FIFO_POLL_PACKETS)
-            {
-                ICM_Sample_t *smp = &batch->samples[pkt_cnt];
-
-                /* Акселерометр (big-endian в FIFO) */
-                smp->accel_x = (int16_t)(((uint16_t)pkt[1] << 8U) | (uint16_t)pkt[2]);
-                smp->accel_y = (int16_t)(((uint16_t)pkt[3] << 8U) | (uint16_t)pkt[4]);
-                smp->accel_z = (int16_t)(((uint16_t)pkt[5] << 8U) | (uint16_t)pkt[6]);
-
-                /* Гироскоп */
-                smp->gyro_x  = (int16_t)(((uint16_t)pkt[7]  << 8U) | (uint16_t)pkt[8]);
-                smp->gyro_y  = (int16_t)(((uint16_t)pkt[9]  << 8U) | (uint16_t)pkt[10]);
-                smp->gyro_z  = (int16_t)(((uint16_t)pkt[11] << 8U) | (uint16_t)pkt[12]);
-
-                /* Температура */
-                smp->temp = (int8_t)pkt[13];
-
-                /* Временная метка (little-endian в FIFO) */
-                smp->timestamp = (uint16_t)(pkt[14] | ((uint16_t)pkt[15] << 8U));
-
-                pkt_cnt++;
-            }
+            offset += 20U;
+            continue;
         }
-        /* Header == 0x80 — пустой пакет-заглушка, пропускаем */
 
-        offset += (uint16_t)ICM45686_FIFO_PACKET_SIZE_16BIT;
-    }
-
-    batch->count = pkt_cnt;
-}
-
-/* ================================================================
- * ICM_ParseAllFIFO — разбор всех 18 датчиков.
- *
- * Для датчиков с fault=1 (бит установлен в g_sensor_fault_mask):
- *   - все samples обнуляются через memset
- *   - count = 0
- * Это гарантирует, что в UART-пакете неисправный датчик
- * всегда виден как нулевые данные.
- * ================================================================ */
-void ICM_ParseAllFIFO(void)
-{
-    uint8_t  b, s;
-    uint8_t  sensor_id;
-    uint32_t fault_mask = g_sensor_fault_mask;  /* Локальная копия — без volatile overhead */
-
-    /* Первый байт RX-буфера — адрес команды (отброшен), данные с байта 1 */
-    const uint16_t data_offset = 1U;
-    const uint16_t data_len    = (uint16_t)(ICM_FIFO_DMA_BUF_SIZE - data_offset);
-
-    for (b = 0U; b < 3U; b++)
-    {
-        for (s = 0U; s < ICM_SENSORS_PER_BUS; s++)
+        /* HIRES пакет (header bit4 = 1) */
+        if (((hdr & FIFO_HDR_HIRES_BIT) != 0U) && (n < ICM_FIFO_POLL_PACKETS))
         {
-            sensor_id = (uint8_t)(b * ICM_SENSORS_PER_BUS + s);
-            g_sensor_batches[sensor_id].sensor_id = sensor_id;
+            ICM_Sample_t *s = &batch->samples[n];
 
-            if ((fault_mask & (1UL << sensor_id)) != 0U)
+            /*
+             * Big Endian: MSB-байт идёт ПЕРВЫМ.
+             *
+             * Акселерометр:
+             *   pkt[1]=Ax MSB, pkt[2]=Ax LSB
+             *   pkt[3]=Ay MSB, pkt[4]=Ay LSB
+             *   pkt[5]=Az MSB, pkt[6]=Az LSB
+             *
+             * Гироскоп:
+             *   pkt[7]=Gx MSB,  pkt[8]=Gx LSB
+             *   pkt[9]=Gy MSB,  pkt[10]=Gy LSB
+             *   pkt[11]=Gz MSB, pkt[12]=Gz LSB
+             *
+             * Nibbles:
+             *   pkt[17]: hi=Ax[3:0], lo=Gx[3:0]
+             *   pkt[18]: hi=Ay[3:0], lo=Gy[3:0]
+             *   pkt[19]: hi=Az[3:0], lo=Gz[3:0]
+             */
+            s->accel_x = build20(pkt[1], pkt[2], (uint8_t)(pkt[17] >> 4U));
+            s->accel_y = build20(pkt[3], pkt[4], (uint8_t)(pkt[18] >> 4U));
+            s->accel_z = build20(pkt[5], pkt[6], (uint8_t)(pkt[19] >> 4U));
+
+            s->gyro_x = build20(pkt[7],  pkt[8],  (uint8_t)(pkt[17] & 0x0FU));
+            s->gyro_y = build20(pkt[9],  pkt[10], (uint8_t)(pkt[18] & 0x0FU));
+            s->gyro_z = build20(pkt[11], pkt[12], (uint8_t)(pkt[19] & 0x0FU));
+
+            /*
+             * Температура: Big Endian, 2 байта.
+             * T[°C] = temp_raw / 128.0f + 25.0f
+             */
+            s->temp_raw = (int16_t)(((uint16_t)pkt[13] << 8U) |
+                                     (uint16_t)pkt[14]);
+
+            /*
+             * Timestamp: Big Endian. Разрешение: 1 мкс/LSB (TMST_RESOL=0).
+             * uint16_t → диапазон 0..65535 мкс (~65 мс), затем wraparound.
+             */
+            if ((hdr & FIFO_HDR_TMST_BIT) != 0U)
             {
-                /* Датчик неисправен — заполнить нулями, count = 0.
-                 * ПК видит нулевые данные и count==0 как признак fault. */
-                memset(g_sensor_batches[sensor_id].samples, 0x00,
-                       sizeof(g_sensor_batches[sensor_id].samples));
-                g_sensor_batches[sensor_id].count = 0U;
+                s->timestamp = (uint16_t)(((uint16_t)pkt[15] << 8U) |
+                                           (uint16_t)pkt[16]);
             }
             else
             {
-                /* Датчик исправен — разобрать FIFO-буфер */
+                s->timestamp = 0U;
+            }
+
+            n++;
+        }
+
+        offset += 20U;
+    }
+
+    batch->count = n;
+}
+
+/**
+ * ICM_ParseAllFIFO — разобрать FIFO всех 18 датчиков.
+ *
+ * Для каждого датчика: если он помечен неисправным (g_sensor_fault_mask),
+ * весь батч обнуляется и count=0. Иначе разбирается payload длиной
+ * (ICM_FIFO_DMA_BUF_SIZE - 1) байт, начиная с байта [1] (байт [0] —
+ * SPI cmd/addr, данные не содержит).
+ */
+void ICM_ParseAllFIFO(void)
+{
+    uint8_t b, s, id;
+
+    for (b = 0U; b < ICM_SPI_BUS_COUNT; b++)
+    {
+        for (s = 0U; s < ICM_SENSORS_PER_BUS; s++)
+        {
+            id = (uint8_t)(b * ICM_SENSORS_PER_BUS + s);
+            g_sensor_batches[id].sensor_id = id;
+
+            if ((g_sensor_fault_mask & (1UL << id)) != 0U)
+            {
+                memset(g_sensor_batches[id].samples, 0x00,
+                       sizeof(g_sensor_batches[id].samples));
+                g_sensor_batches[id].count = 0U;
+            }
+            else
+            {
+                /* Byte[0] = SPI address/cmd byte, данные начинаются с byte[1] */
                 ICM_ParseFIFOBuffer(
-                    &g_fifo_data[b][s][data_offset],
-                    data_len,
-                    &g_sensor_batches[sensor_id]);
+                    &g_fifo_data[b][s][1U],
+                    (uint16_t)(ICM_FIFO_DMA_BUF_SIZE - 1U),
+                    &g_sensor_batches[id]);
             }
         }
     }
