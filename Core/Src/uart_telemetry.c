@@ -1,25 +1,37 @@
 /**
  * @file uart_telemetry.c
- * @brief USART1 telemetry through DMA1 Stream1 with TX ping-pong buffering.
+ * @brief USART1 telemetry through DMA1 Stream1 with TX ring-buffer.
  *
  * ------------------------------------------------------------------
- * [ИЗМЕНЕНИЯ] Ring-buffer (8 слотов) заменён на ping-pong (2 буфера).
+ * [ИЗМЕНЕНИЯ v2] Ping-pong (2 буфера) заменён на ring-buffer
+ * (UART_TX_QUEUE_DEPTH слотов).
+ *
+ * Раньше: за один цикл опроса (100 Гц) FIFO каждого датчика отдавал
+ * 16 сэмплов (1600 Гц ODR / 100 Гц poll rate), но в UART уходил
+ * только последний (samples[count-1]) -> 1 кадр/цикл -> 100 кадров/с
+ * (то есть "каждый 16-й пакет").
+ *
+ * Теперь: UART_BuildAndSendSyncFrame() формирует и ставит в очередь
+ * ВСЕ до 16 сэмплов батча как отдельные 348-байтные кадры ->
+ * 100 Гц * 16 = 1600 кадров/с ("каждый пакет").
  *
  * main-loop @ 100 Hz:
  *   ICM_ParseAllFIFO()
- *   UART_BuildAndSendSyncFrame()
+ *   UART_BuildAndSendSyncFrame()      <-- кладёт до 16 кадров в очередь
  *         |
  *         v
- *   ping-pong[write_idx]  <-- producer пишет сюда
+ *   ring-buffer[16 x 348 bytes]  <-- producer пишет сюда все 16 кадров
  *         |
- *         v (если DMA idle: сразу; иначе через TC IRQ)
- *   DMA1 Stream1 -> USART1 TX  <-- читает ping-pong[read_idx]
+ *         v (DMA TC IRQ вытягивает кадры один за другим)
+ *   DMA1 Stream1 -> USART1 TX
  *
- * При 8.1 Mbaud передача одного 348-байтного кадра занимает:
- *   348 bytes * 10 bits/byte / 8.1e6 bit/s ≈ 344 мкс.
- * Producer вызывается раз в 10 мс (100 Гц) — DMA гарантированно
- * успевает освободиться между вызовами с огромным запасом (10 мс vs
- * 344 мкс), поэтому двух буферов достаточно и потерь кадров не будет.
+ * Расчёт по времени при 8.1 Mbaud:
+ *   1 кадр (348 байт): 348 * 10 bits/byte / 8.1e6 bit/s ~= 344 мкс.
+ *   16 кадров подряд:  16 * 344 мкс ~= 5.50 мс.
+ *   Период опроса (TIM6 @ 100 Гц): 10 мс.
+ *   Запас: 10 мс - 5.50 мс = 4.5 мс -- DMA гарантированно успевает
+ *   "выгребать" очередь между циклами опроса, потерь кадров не будет
+ *   при штатной работе (см. также g_uart_drop_count).
  * ------------------------------------------------------------------
  */
 
@@ -28,48 +40,49 @@
 #include "main.h"
 
 /* ================================================================
- * TX ping-pong buffers в Non-Cacheable D2 SRAM.
+ * TX ring-buffer в Non-Cacheable D2 SRAM.
  *
- * DMA читает буфер непосредственно из ping-pong slot.
+ * DMA читает буфер непосредственно из слота очереди.
  * Поэтому cache-clean перед запуском DMA не требуется.
  *
- * 2 буфера × 348 bytes = 696 bytes D2 SRAM (было 2784 bytes при
- * ring-buffer depth=8).
+ * UART_TX_QUEUE_DEPTH (32) x 348 bytes = 11136 bytes D2 SRAM
+ * (было 696 bytes при ping-pong depth=2).
  * ================================================================ */
-static uint8_t g_uart_tx_ping_pong[UART_PINGPONG_BUFFERS][UART_PKT_TOTAL_BYTES]
+static uint8_t g_uart_tx_queue[UART_TX_QUEUE_DEPTH][UART_PKT_TOTAL_BYTES]
     __attribute__((section(".RAM_D2"), aligned(4)));
 
 /*
- * Состояние ping-pong:
+ * Состояние ring-buffer очереди (классическая circular queue):
  *
- * s_pp_write_idx — индекс буфера, в который сейчас (или в следующий
- *                  раз) пишет producer.
- * s_pp_ready     — флаг: producer записал новый кадр, который ещё не
- *                  подхвачен DMA.
- * s_dma_active   — DMA сейчас передаёт один из буферов.
+ * s_q_head       — индекс слота, который сейчас передаёт DMA (или
+ *                  будет передавать следующим), читает Consumer.
+ * s_q_tail       — индекс слота, в который producer запишет
+ *                  следующий кадр.
+ * s_q_count      — число кадров, ожидающих отправки (0..UART_TX_QUEUE_DEPTH).
+ * s_dma_active   — DMA сейчас передаёт слот s_q_head.
  *
- * Producer:  main-loop (UART_BuildAndSendSyncFrame).
- * Consumer:  DMA TC IRQ (UART_DMA_TxComplete).
- *
- * Инвариант: пока s_dma_active==1, DMA читает буфер с индексом
- * (s_pp_write_idx ^ 1U) — то есть "не текущий write". Producer
- * никогда не пишет в буфер, который в данный момент передаёт DMA.
+ * Producer:  main-loop (UART_BuildAndSendSyncFrame), кладёт кадры
+ *            в s_q_tail и увеличивает s_q_count.
+ * Consumer:  DMA TC IRQ (UART_DMA_TxComplete), после завершения
+ *            передачи текущего слота продвигает s_q_head и
+ *            уменьшает s_q_count; если остались кадры — запускает
+ *            следующую передачу.
  */
-static volatile uint8_t s_pp_write_idx = 0U;
-static volatile uint8_t s_pp_ready     = 0U;
-static volatile uint8_t s_dma_active   = 0U;
+static volatile uint8_t s_q_head      = 0U;
+static volatile uint8_t s_q_tail      = 0U;
+static volatile uint8_t s_q_count     = 0U;
+static volatile uint8_t s_dma_active  = 0U;
 
-/* frame_counter переполняется modulo 65536. При 100 Hz это ~655.36 s. */
+/* frame_counter переполняется modulo 65536. При 1600 Hz это ~41 s. */
 static uint16_t s_frame_counter = 0U;
 
 /* ================================================================
  * Public diagnostics
  *
- * g_uart_drop_count / g_uart_queue_high_watermark / g_uart_queue_count
- * оставлены как заглушки нулевой семантики для совместимости с уже
- * существующим кодом (main.c может их читать/печатать). В ping-pong
- * схеме кадры не отбрасываются, поэтому g_uart_drop_count всегда 0,
- * а "глубина очереди" всегда 0 или 1 (g_uart_queue_count = s_pp_ready).
+ * [ИЗМЕНЕНИЕ v2] g_uart_drop_count теперь реально считает потерянные
+ * кадры при переполнении очереди (не должно происходить при штатной
+ * работе, см. расчёт времени выше). g_uart_queue_count/high_watermark
+ * отражают реальную глубину ring-buffer очереди.
  * ================================================================ */
 volatile uint32_t g_uart_drop_count           = 0U;
 volatile uint32_t g_uart_build_count          = 0U;
@@ -176,23 +189,28 @@ static void UART_ClearIMU19(uint8_t dst[UART_IMU_WIRE_BYTES])
 }
 
 /* ================================================================
- * Формирование полного пакета в предоставленный ping-pong slot.
+ * [ИЗМЕНЕНИЕ v2] Формирование ОДНОГО полного пакета для ЗАДАННОГО
+ * индекса sample_idx (0..ICM_FIFO_POLL_PACKETS-1) в предоставленный
+ * слот очереди.
  *
- * [ИЗМЕНЕНИЕ] Каждый датчик за один цикл опроса накопил до
- * ICM_FIFO_POLL_PACKETS (16) сэмплов в g_sensor_batches[id].samples[].
- * В UART-кадр упаковывается только ПОСЛЕДНИЙ по времени сэмпл
- * (samples[count-1]) — как и раньше, формат телеметрии передаёт один
- * "снимок" на кадр, а не всю пачку из 16 точек. Использование
- * последнего (самого свежего) сэмпла минимизирует задержку телеметрии
- * относительно момента чтения FIFO.
+ * Раньше функция всегда брала последний сэмпл (samples[count-1]).
+ * Теперь индекс сэмпла передаётся явно вызывающей стороной, что
+ * позволяет вызывать UART_BuildPacket() в цикле по всем сэмплам
+ * батча и получить 16 независимых кадров вместо одного.
+ *
+ * Если для конкретного датчика sample_idx >= g_sensor_batches[id].count
+ * (то есть датчик за этот цикл отдал МЕНЬШЕ пакетов, чем другие -- FIFO
+ * может слегка "разойтись" по числу валидных HIRES-пакетов между
+ * датчиками), IMU slot заполняется нулями (invalid marker), как и
+ * раньше при отсутствии данных.
  *
  * Не запускает DMA, поэтому безопасно выполняется до критической
- * секции ping-pong producer/consumer.
+ * секции очереди producer/consumer.
  * ================================================================ */
-static void UART_BuildPacket(uint8_t pkt[UART_PKT_TOTAL_BYTES])
+static void UART_BuildPacket(uint8_t pkt[UART_PKT_TOTAL_BYTES],
+                              uint8_t sample_idx)
 {
     uint8_t  id;
-    uint8_t  last_idx;
     uint32_t imu_off;
     uint16_t crc;
 
@@ -208,19 +226,18 @@ static void UART_BuildPacket(uint8_t pkt[UART_PKT_TOTAL_BYTES])
         imu_off = UART_OFFSET_SAMPLES +
                   ((uint32_t)id * UART_IMU_WIRE_BYTES);
 
-        if ((g_sensor_batches[id].count > 0U) &&
+        if ((sample_idx < g_sensor_batches[id].count) &&
             ((g_sensor_fault_mask & (1UL << id)) == 0U))
         {
-            /* Берём самый свежий сэмпл из батча (последний из до 16). */
-            last_idx = (uint8_t)(g_sensor_batches[id].count - 1U);
-
+            /* Берём именно sample_idx-й сэмпл из батча (0..count-1). */
             UART_PackIMU19(&pkt[imu_off],
-                           &g_sensor_batches[id].samples[last_idx]);
+                           &g_sensor_batches[id].samples[sample_idx]);
         }
         else
         {
             /*
-             * Invalid IMU: весь 19-byte slot = 0.
+             * Invalid IMU (либо fault, либо этот датчик отдал меньше
+             * пакетов, чем sample_idx): весь 19-byte slot = 0.
              * MATLAB должен интерпретировать all-zero slot как NaN.
              */
             UART_ClearIMU19(&pkt[imu_off]);
@@ -238,7 +255,7 @@ static void UART_BuildPacket(uint8_t pkt[UART_PKT_TOTAL_BYTES])
 }
 
 /* ================================================================
- * Запуск DMA передачи буфера с указанным индексом.
+ * Запуск DMA передачи буфера с указанным индексом слота очереди.
  *
  * Вызывать только внутри участка, где DMA1_Stream1_IRQn запрещён
  * либо из самого DMA1_Stream1 IRQ, либо при гарантированно idle DMA.
@@ -258,7 +275,7 @@ static void UART_StartDMAFromBuffer(uint8_t buf_idx)
 
     LL_DMA_SetMemoryAddress(DMA1,
                              LL_DMA_STREAM_1,
-                             (uint32_t)&g_uart_tx_ping_pong[buf_idx][0]);
+                             (uint32_t)&g_uart_tx_queue[buf_idx][0]);
 
     LL_DMA_SetPeriphAddress(DMA1,
                              LL_DMA_STREAM_1,
@@ -302,9 +319,10 @@ void UART_Telemetry_Init(void)
 
     LL_USART_EnableDMAReq_TX(USART1);
 
-    s_pp_write_idx = 0U;
-    s_pp_ready     = 0U;
-    s_dma_active   = 0U;
+    s_q_head     = 0U;
+    s_q_tail     = 0U;
+    s_q_count    = 0U;
+    s_dma_active = 0U;
 
     s_frame_counter = 0U;
 
@@ -319,87 +337,107 @@ void UART_Telemetry_Init(void)
     g_uart_dma_dme_count        = 0U;
     g_uart_dma_fe_count         = 0U;
 
-    for (i = 0U; i < UART_PINGPONG_BUFFERS; i++)
+    for (i = 0U; i < UART_TX_QUEUE_DEPTH; i++)
     {
         for (j = 0U; j < UART_PKT_TOTAL_BYTES; j++)
         {
-            g_uart_tx_ping_pong[i][j] = 0U;
+            g_uart_tx_queue[i][j] = 0U;
         }
     }
 }
 
 /* ================================================================
- * Producer: сформировать пакет и отправить его через ping-pong.
+ * Producer: сформировать ВСЕ кадры батча и поставить их в очередь.
  *
  * Вызывается после ICM_ParseAllFIFO(), один раз за цикл опроса (100 Гц).
  *
- * Логика:
- *  1. Записать пакет в g_uart_tx_ping_pong[s_pp_write_idx].
- *  2. Установить s_pp_ready = 1.
- *  3. Если DMA простаивает (s_dma_active==0):
- *       - немедленно запустить DMA из s_pp_write_idx;
- *       - переключить s_pp_write_idx на другой буфer;
- *       - сбросить s_pp_ready (кадр уже забран).
- *     Если DMA активен — ничего не запускаем: следующий запуск
- *     произойдёт автоматически в UART_DMA_TxComplete().
+ * [ИЗМЕНЕНИЕ v2] Раньше строился и отправлялся ровно 1 кадр (последний
+ * сэмпл батча). Теперь в цикле по ICM_FIFO_POLL_PACKETS (16) строится
+ * и ставится в очередь кадр для КАЖДОГО индекса сэмпла: 0, 1, ..., 15.
+ * Итог: 100 Гц * 16 = 1600 кадров/с на выходе UART.
+ *
+ * Логика на каждой итерации:
+ *  1. Построить пакет для sample_idx в g_uart_tx_queue[s_q_tail]
+ *     (вне critical section -- построение пакета не должно
+ *     увеличивать IRQ latency).
+ *  2. Короткая critical section: если очередь не полна -- продвинуть
+ *     s_q_tail, увеличить s_q_count; если DMA простаивает -- сразу
+ *     запустить передачу из головы очереди.
+ *  3. Если очередь полна -- инкремент g_uart_drop_count, кадр
+ *     отбрасывается (при штатной работе, см. расчёт времени в
+ *     заголовке файла, это не должно происходить).
  * ================================================================ */
 void UART_BuildAndSendSyncFrame(void)
 {
     uint32_t irq_state;
-    uint8_t  local_write_idx;
+    uint8_t  sample_idx;
 
     g_uart_build_count++;
 
-    /*
-     * Короткая critical section вокруг чтения/изменения общих
-     * переменных ping-pong состояния (s_dma_active, s_pp_write_idx,
-     * s_pp_ready), которые также меняются в DMA IRQ.
-     *
-     * Само построение пакета (UART_BuildPacket) выполняется ВНЕ
-     * critical section, чтобы не увеличивать IRQ latency.
-     */
-    irq_state = __get_PRIMASK();
-    __disable_irq();
-    local_write_idx = s_pp_write_idx;
-    if (irq_state == 0U)
+    for (sample_idx = 0U; sample_idx < (uint8_t)ICM_FIFO_POLL_PACKETS;
+         sample_idx++)
     {
-        __enable_irq();
-    }
+        uint8_t local_tail;
+        uint8_t queue_full;
 
-    /* Построение пакета в текущем write-буфере (DMA его не читает). */
-    UART_BuildPacket(g_uart_tx_ping_pong[local_write_idx]);
+        /*
+         * Короткая critical section вокруг чтения общих переменных
+         * очереди (s_q_count, s_q_tail), которые также меняются в
+         * DMA IRQ.
+         */
+        irq_state = __get_PRIMASK();
+        __disable_irq();
+        queue_full = (s_q_count >= (uint8_t)UART_TX_QUEUE_DEPTH) ? 1U : 0U;
+        local_tail = s_q_tail;
+        if (irq_state == 0U)
+        {
+            __enable_irq();
+        }
 
-    irq_state = __get_PRIMASK();
-    __disable_irq();
+        if (queue_full != 0U)
+        {
+            /* Очередь переполнена -- кадр отбрасывается. */
+            g_uart_drop_count++;
+            continue;
+        }
 
-    s_pp_ready = 1U;
-    g_uart_enqueue_count++;
-    g_uart_queue_count = s_pp_ready;
-    if (g_uart_queue_count > g_uart_queue_high_watermark)
-    {
-        g_uart_queue_high_watermark = g_uart_queue_count;
-    }
+        /* Построение пакета в текущем tail-слоте (DMA его не читает,
+           так как местоположение ещё не опубликовано producer'ом). */
+        UART_BuildPacket(g_uart_tx_queue[local_tail], sample_idx);
 
-    if (s_dma_active == 0U)
-    {
-        /* DMA простаивает — запускаем передачу немедленно. */
-        UART_StartDMAFromBuffer(local_write_idx);
+        irq_state = __get_PRIMASK();
+        __disable_irq();
 
-        /* Переключаем write-буфер на другой, кадр уже "забран" DMA. */
-        s_pp_write_idx ^= 1U;
-        s_pp_ready = 0U;
-        g_uart_queue_count = 0U;
-    }
-    /*
-     * Если DMA активен — ничего не делаем: UART_DMA_TxComplete()
-     * увидит s_pp_ready==1 и запустит передачу этого же буфера
-     * (local_write_idx == s_pp_write_idx, ещё не переключённого)
-     * сразу после завершения текущей передачи.
-     */
+        s_q_tail = (uint8_t)((s_q_tail + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+        s_q_count++;
+        g_uart_enqueue_count++;
+        g_uart_queue_count = s_q_count;
+        if (g_uart_queue_count > g_uart_queue_high_watermark)
+        {
+            g_uart_queue_high_watermark = g_uart_queue_count;
+        }
 
-    if (irq_state == 0U)
-    {
-        __enable_irq();
+        if (s_dma_active == 0U)
+        {
+            /* DMA простаивает -- запускаем передачу немедленно
+               из головы очереди (s_q_head), затем "изымаем" этот
+               кадр из очереди (он уже забран DMA). */
+            UART_StartDMAFromBuffer(s_q_head);
+
+            s_q_head = (uint8_t)((s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+            s_q_count--;
+            g_uart_queue_count = s_q_count;
+        }
+        /*
+         * Если DMA активен -- ничего не делаем: UART_DMA_TxComplete()
+         * увидит s_q_count > 0 и запустит передачу следующего кадра
+         * из головы очереди сразу после завершения текущей передачи.
+         */
+
+        if (irq_state == 0U)
+        {
+            __enable_irq();
+        }
     }
 }
 
@@ -408,29 +446,22 @@ void UART_BuildAndSendSyncFrame(void)
  *
  * Вызывать только из DMA1_Stream1_IRQHandler() после очистки TC flag.
  *
- * Логика:
- *  - s_dma_active = 0.
- *  - Если producer успел подготовить новый кадр (s_pp_ready==1):
- *      кадр лежит в s_pp_write_idx (producer ещё не переключил индекс,
- *      т.к. DMA был занят) — запускаем передачу из s_pp_write_idx,
- *      затем переключаем s_pp_write_idx на другой буфер и сбрасываем
- *      s_pp_ready.
- *  - Если нового кадра нет (s_pp_ready==0) — DMA не перезапускается,
- *    остаётся idle до следующего вызова UART_BuildAndSendSyncFrame().
+ * [ИЗМЕНЕНИЕ v2] Раньше проверялся флаг s_pp_ready (0 или 1). Теперь
+ * проверяется s_q_count (0..UART_TX_QUEUE_DEPTH) -- если в очереди
+ * остались непереданные кадры, немедленно запускается передача
+ * следующего кадра из головы очереди (ring-buffer semantics).
  * ================================================================ */
 void UART_DMA_TxComplete(void)
 {
     g_uart_dma_tc_count++;
     s_dma_active = 0U;
 
-    if (s_pp_ready == 1U)
+    if (s_q_count > 0U)
     {
-        uint8_t ready_idx = s_pp_write_idx;
+        UART_StartDMAFromBuffer(s_q_head);
 
-        UART_StartDMAFromBuffer(ready_idx);
-
-        s_pp_write_idx ^= 1U;
-        s_pp_ready = 0U;
-        g_uart_queue_count = 0U;
+        s_q_head = (uint8_t)((s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+        s_q_count--;
+        g_uart_queue_count = s_q_count;
     }
 }
