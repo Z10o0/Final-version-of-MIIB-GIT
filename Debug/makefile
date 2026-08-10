@@ -60,8 +60,8 @@ all: main-build
 main-build: Final\ version\ of\ MIIB.elf secondary-outputs
 
 # Tool invocations
-Final\ version\ of\ MIIB.elf Final\ version\ of\ MIIB.map: $(OBJS) $(USER_OBJS) C:\Users\Zhulkov\ Aleksandr\Desktop\Final-version-of-MIIB-GIT\Final-version-of-MIIB-GIT\STM32H723ZGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
-	arm-none-eabi-gcc -o "Final version of MIIB.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\Zhulkov Aleksandr\Desktop\Final-version-of-MIIB-GIT\Final-version-of-MIIB-GIT\STM32H723ZGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Final version of MIIB.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
+Final\ version\ of\ MIIB.elf Final\ version\ of\ MIIB.map: $(OBJS) $(USER_OBJS) C:\Users\17082\OneDrive\Рабочий\ стол\Final\ version\ of\ MIIB\Final\ version\ of\ MIIB\ GIT\STM32H723ZGTX_FLASH.ld makefile objects.list $(OPTIONAL_TOOL_DEPS)
+	arm-none-eabi-gcc -o "Final version of MIIB.elf" @"objects.list" $(USER_OBJS) $(LIBS) -mcpu=cortex-m7 -T"C:\Users\17082\OneDrive\Рабочий стол\Final version of MIIB\Final version of MIIB GIT\STM32H723ZGTX_FLASH.ld" --specs=nosys.specs -Wl,-Map="Final version of MIIB.map" -Wl,--gc-sections -static --specs=nano.specs -mfpu=fpv5-d16 -mfloat-abi=hard -mthumb -Wl,--start-group -lc -lm -Wl,--end-group
 	@echo 'Finished building target: $@'
 	@echo ' '
 
