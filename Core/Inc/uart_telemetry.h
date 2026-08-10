@@ -1,56 +1,40 @@
 /**
  * @file    uart_telemetry.h
- * @brief   Телеметрия по USART1 (RS-485) через DMA, LL-драйвер, без HAL.
+ * @brief   Телеметрия USART1 (RS-485) через DMA с очередью TX-кадров.
  *
- * -----------------------------------------------------------------------
- * UART wire-формат (348 байт):
+ * UART wire-формат, 348 байт:
  *
  *  Смещение  Размер  Содержимое
- *  --------  ------  ------------------------------------------
- *     0        1     Заголовок: 0xAA
- *     1        1     Заголовок: 0x55
- *     2..3     2     frame_counter  (uint16_t, Little Endian)
- *     4..345 342     18 × 19 байт — данные S00..S17
- *   346..347   2     CRC16-CCITT (uint16_t, Little Endian)
- *                    считается по байтам [2..345] (344 байта payload)
- *  --------  ------
- *  ИТОГО: 348 байт
+ *  --------  ------  -----------------------------------------------
+ *     0..1     2     Header: 0xAA 0x55
+ *     2..3     2     frame_counter, uint16_t Little Endian
+ *     4..345 342     S00..S17: 18 × 19-byte HIRES IMU block
+ *   346..347   2     CRC16-CCITT Little Endian по bytes [2..345]
  *
- *  Примечание: footer 0x0D 0x0A и sensor_mask УДАЛЕНЫ.
+ * Полный размер: 2 + 2 + 18 * 19 + 2 = 348 bytes.
  *
- * -----------------------------------------------------------------------
- * Формат одного IMU-блока (19 байт, offset внутри блока 0-based):
+ * Формат одного 19-byte IMU block:
  *
- *  Байт  Содержимое
- *  ----  ------------------------------------------------
- *   0    Ax[19:12]
- *   1    Ax[11:4]
- *   2    Ay[19:12]
- *   3    Ay[11:4]
- *   4    Az[19:12]
- *   5    Az[11:4]
- *   6    Gx[19:12]
- *   7    Gx[11:4]
- *   8    Gy[19:12]
- *   9    Gy[11:4]
- *  10    Gz[19:12]
- *  11    Gz[11:4]
- *  12    temp_raw[15:8]   (Big Endian)
- *  13    temp_raw[7:0]
- *  14    timestamp[15:8]  (Big Endian)
- *  15    timestamp[7:0]
- *  16    (Ax[3:0] << 4) | Gx[3:0]   — младшие nibble X
- *  17    (Ay[3:0] << 4) | Gy[3:0]   — младшие nibble Y
- *  18    (Az[3:0] << 4) | Gz[3:0]   — младшие nibble Z
+ *   [0]  Ax[19:12]               [10] Gz[19:12]
+ *   [1]  Ax[11:4]                [11] Gz[11:4]
+ *   [2]  Ay[19:12]               [12] temp_raw[15:8]
+ *   [3]  Ay[11:4]                [13] temp_raw[7:0]
+ *   [4]  Az[19:12]               [14] timestamp[15:8]
+ *   [5]  Az[11:4]                [15] timestamp[7:0]
+ *   [6]  Gx[19:12]               [16] Ax[3:0] | Gx[3:0]
+ *   [7]  Gx[11:4]                [17] Ay[3:0] | Gy[3:0]
+ *   [8]  Gy[19:12]               [18] Az[3:0] | Gz[3:0]
+ *   [9]  Gy[11:4]
  *
- *  Начало блока датчика N (0-based) в UART буфере:
- *    imu_offset = UART_OFFSET_SAMPLES + N * UART_IMU_WIRE_BYTES
+ * temp_raw и timestamp: Big Endian внутри IMU block.
+ * frame_counter и CRC: Little Endian.
  *
- * -----------------------------------------------------------------------
- * Бюджет UART:
+ * Footer и sensor_mask отсутствуют.
+ *
+ * UART budget:
  *   348 bytes × 10 UART bits/byte = 3480 bits/frame.
  *   At 1600 frames/s: 5.568 Mbit/s.
- *   At 8 Mbaud UART:  reserve = 2.432 Mbit/s.
+ *   At 8 Mbaud UART: reserve = 2.432 Mbit/s.
  */
 
 #ifndef UART_TELEMETRY_H
@@ -61,11 +45,12 @@ extern "C" {
 #endif
 
 #include <stdint.h>
-#include "icm45686_data.h"   /* ICM_Sample_t, ICM_SensorBatch_t, g_sensor_batches */
-#include "icm45686_config.h" /* ICM_TOTAL_SENSORS */
+
+#include "icm45686_data.h"
+#include "icm45686_config.h"
 
 /* ================================================================
- * Константы wire-протокола
+ * Wire protocol constants
  * ================================================================ */
 #define UART_PKT_HEADER_0       0xAAU
 #define UART_PKT_HEADER_1       0x55U
@@ -76,62 +61,102 @@ extern "C" {
 #define UART_HEADER_BYTES       2U
 #define UART_CRC_BYTES          2U
 
-/* Payload = frame_counter (2) + 18 × 19 = 344 байта — именно по нему CRC */
 #define UART_PAYLOAD_BYTES \
     (UART_COUNTER_BYTES + UART_SENSOR_COUNT * UART_IMU_WIRE_BYTES)
 
-/* Полный пакет: header(2) + payload(344) + CRC(2) = 348 байт */
 #define UART_PKT_TOTAL_BYTES \
     (UART_HEADER_BYTES + UART_PAYLOAD_BYTES + UART_CRC_BYTES)
 
-/* Смещения внутри TX-буфера (0-based, в байтах) */
 #define UART_OFFSET_HEADER      0U
 #define UART_OFFSET_COUNTER     2U
 #define UART_OFFSET_SAMPLES     4U
 #define UART_OFFSET_CRC         346U
 
-/* ================================================================
- * Compile-time проверки
- * ================================================================ */
+/*
+ * Очередь кадров TX.
+ *
+ * Значение обязательно является степенью двойки, поскольку индексы
+ * ring-buffer инкрементируются через mask UART_TX_QUEUE_MASK.
+ *
+ * 8 кадров × 348 bytes = 2784 bytes D2 SRAM.
+ * При частоте 1600 Hz это до 5 ms кратковременного запаса.
+ */
+#define UART_TX_QUEUE_DEPTH     8U
+#define UART_TX_QUEUE_MASK      (UART_TX_QUEUE_DEPTH - 1U)
+
 _Static_assert(UART_PAYLOAD_BYTES == 344U,
                "Unexpected UART payload size");
 
 _Static_assert(UART_PKT_TOTAL_BYTES == 348U,
                "Unexpected UART packet size");
 
+_Static_assert((UART_TX_QUEUE_DEPTH & UART_TX_QUEUE_MASK) == 0U,
+               "UART_TX_QUEUE_DEPTH must be a power of two");
+
 /* ================================================================
- * Публичные функции
+ * Public API
  * ================================================================ */
 
 /**
- * @brief  Инициализация модуля.
- *         Разрешает TC-прерывание DMA1 Stream1 и DMA-режим TX USART1.
- *         Вызывать один раз после MX_USART1_UART_Init().
+ * @brief Инициализация USART1 TX DMA telemetry.
+ *
+ * Разрешает DMA1 Stream1 TC interrupt и USART1 TX DMA request.
+ * Вызывать после MX_USART1_UART_Init().
  */
 void UART_Telemetry_Init(void);
 
 /**
- * @brief  Собирает 348-байтный кадр из samples[count-1] каждого батча
- *         g_sensor_batches[] в формате 19-byte HIRES и запускает DMA TX.
+ * @brief Формирует кадр из последних FIFO samples и помещает его в TX queue.
  *
- *         Если DMA ещё занят предыдущей передачей — кадр пропускается
- *         (цена записывается в g_uart_drop_count).
+ * Вызывать после ICM_ParseAllFIFO().
  *
- *         Вызывать из main-loop ПОСЛЕ ICM_ParseAllFIFO().
+ * Если очередь не заполнена:
+ * - кадр помещается в очередь;
+ * - если DMA простаивает, немедленно запускается передача.
+ *
+ * Если очередь заполнена:
+ * - новый кадр отбрасывается;
+ * - увеличивается g_uart_drop_count.
  */
 void UART_BuildAndSendSyncFrame(void);
 
 /**
- * @brief  Вызывается из DMA1_Stream1_IRQHandler при завершении TX.
- *         Сбрасывает флаг занятости и отключает DMA-поток.
+ * @brief Вызывать из DMA1_Stream1_IRQHandler() при DMA TC.
+ *
+ * Завершает текущий пакет и, если очередь не пуста, запускает
+ * передачу следующего пакета без ожидания main-loop.
  */
 void UART_DMA_TxComplete(void);
 
-/**
- * @brief  Счётчик пропущенных кадров (DMA был занят).
- *         Доступен извне для отладки (breakpoint / watch).
- */
+/* ================================================================
+ * Debug counters
+ * ================================================================ */
+
+/* Число отброшенных кадров из-за полного TX ring-buffer. */
 extern volatile uint32_t g_uart_drop_count;
+
+/* Число вызовов UART_BuildAndSendSyncFrame(). */
+extern volatile uint32_t g_uart_build_count;
+
+/* Число кадров, принятых в очередь. */
+extern volatile uint32_t g_uart_enqueue_count;
+
+/* Число DMA-передач, реально запущенных. */
+extern volatile uint32_t g_uart_dma_start_count;
+
+/* Число DMA transfer-complete IRQ. */
+extern volatile uint32_t g_uart_dma_tc_count;
+
+/* Максимальная фактически достигнутая глубина очереди. */
+extern volatile uint8_t g_uart_queue_high_watermark;
+
+/* Текущая глубина очереди: 0...UART_TX_QUEUE_DEPTH. */
+extern volatile uint8_t g_uart_queue_count;
+
+/* Ошибки DMA1 Stream1 для USART1 TX. */
+extern volatile uint32_t g_uart_dma_te_count;
+extern volatile uint32_t g_uart_dma_dme_count;
+extern volatile uint32_t g_uart_dma_fe_count;
 
 #ifdef __cplusplus
 }

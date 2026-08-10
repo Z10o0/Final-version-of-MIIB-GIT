@@ -7,9 +7,9 @@ close all; clearvars; clc;
 
 %% ── CONFIG ───────────────────────────────────────────────────────────────
 PORT        = 'COM3';
-BAUD        = 8000000;      % должно совпадать с USART1 в MCU
+BAUD        = 8100000;      % должно совпадать с USART1 в MCU
 BUF_SIZE    = 32 * 1024 * 1024;
-TIMEOUT_S   = 30;
+TIMEOUT_S   = 20;
 N_SENSORS   = 18;
 PKT_TOTAL   = 348;          % новый размер пакета
 FRAME_HZ    = 1600;
