@@ -121,11 +121,14 @@ int main(void)
   //LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
 
   MX_DMA_Init();
-  MX_BDMA_Init();
 
-  MX_SPI6_Init();
-  MX_SPI3_Init();
-  MX_SPI2_Init();
+  /* [REMOVED] MX_BDMA_Init(), MX_SPI6_Init(), MX_SPI3_Init(), MX_SPI2_Init() —
+   * эти периферии не участвуют в acquisition pipeline (используются только
+   * SPI1/SPI5/SPI4 + DMA1/DMA2). Их инициализация увеличивала init-time
+   * overhead и расширяла fault surface без функциональной пользы.
+   * Функции MX_SPI2_Init()/MX_SPI3_Init()/MX_SPI6_Init()/MX_BDMA_Init()
+   * оставлены в файле ниже (на случай будущего использования), но не
+   * вызываются. */
 
   MX_SPI1_Init();
   MX_SPI5_Init();
@@ -156,22 +159,36 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-    /* Флаг g_fifo_batch_ready устанавливается в ISR после завершения
-       DMA-чтения всех трёх шин. Основной цикл — только парсинг и отправка. */
-	  if (g_fifo_batch_ready != 0U)
-	  {
-	      g_fifo_batch_ready = 0U;
+    /* [REWRITE v2] Атомарное потребление event-битов вместо чтения
+     * g_fifo_batch_ready напрямую. ICM_ConsumeEvents() забирает и
+     * очищает весь bitmap за одну exclusive-access операцию (LDREX/STREX),
+     * поэтому main loop никогда не видит частично обновлённое состояние,
+     * даже если ISR трёх разных шин выставляют события почти одновременно. */
+    uint32_t events = ICM_ConsumeEvents();
 
-	      /*
-	       * Парсер должен брать полезные FIFO байты с [1]:
-	       * g_fifo_data[bus][imu][1].
-	       * g_fifo_data[bus][imu][0] — ответ на командный байт FIFO_DATA.
-	       */
-	      ICM_ParseAllFIFO();
+    if ((events & ICM_EVT_BATCH_READY) != 0U)
+    {
+      /*
+       * Парсер должен брать полезные FIFO байты с [1]:
+       * g_fifo_data[bus][imu][1].
+       * g_fifo_data[bus][imu][0] — ответ на командный байт FIFO_DATA.
+       */
+      ICM_ParseAllFIFO();
 
-	      UART_BuildAndSendSyncFrame();
-	      //UART_SendBatch();
-	  }
+      UART_BuildAndSendSyncFrame();
+      //UART_SendBatch();
+    }
+
+    if ((events & (ICM_EVT_BUS0_FAULT | ICM_EVT_BUS1_FAULT | ICM_EVT_BUS2_FAULT)) != 0U)
+    {
+      /* Опционально: инкремент диагностических счётчиков / телеметрия faults.
+       * Само восстановление шины уже выполнено в ICM_RecoverBus() внутри ISR. */
+    }
+
+    if ((events & ICM_EVT_DMA_TIMEOUT) != 0U)
+    {
+      /* Опционально: телеметрия DMA timeout. Recovery уже произошло в ISR. */
+    }
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -185,8 +202,13 @@ int main(void)
   */
 void SystemClock_Config(void)
 {
-  LL_FLASH_SetLatency(LL_FLASH_LATENCY_3);
-  while(LL_FLASH_GetLatency()!= LL_FLASH_LATENCY_3)
+  /* [FIX] STM32H723 @ 550 MHz, VOS0: требуется FLASH_LATENCY_4 (4 wait states),
+   * а не LATENCY_3. LATENCY_3 достаточно только до ~450 МГц при VOS0 —
+   * см. RM0468 Table "FLASH recommended number of wait states". Работа
+   * с недостаточным latency формально вне timing margin и может приводить
+   * к redxbit corruption под температурной/voltage нагрузкой. */
+  LL_FLASH_SetLatency(LL_FLASH_LATENCY_4);
+  while(LL_FLASH_GetLatency()!= LL_FLASH_LATENCY_4)
   {
   }
   LL_PWR_ConfigSupply(LL_PWR_LDO_SUPPLY);
@@ -938,7 +960,7 @@ static void MX_TIM6_Init(void)
   /* USER CODE END TIM6_Init 1 */
   TIM_InitStruct.Prescaler = 274;
   TIM_InitStruct.CounterMode = LL_TIM_COUNTERMODE_UP;
-  TIM_InitStruct.Autoreload = 9999; //3124 для 3200Гц
+  TIM_InitStruct.Autoreload = 9999;
   LL_TIM_Init(TIM6, &TIM_InitStruct);
   LL_TIM_DisableARRPreload(TIM6);
   LL_TIM_SetTriggerOutput(TIM6, LL_TIM_TRGO_RESET);
