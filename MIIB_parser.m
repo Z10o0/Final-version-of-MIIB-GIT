@@ -26,12 +26,12 @@ function result = MIIB_run(varargin)
     addParameter(p, 'port',        "COM3");
     addParameter(p, 'baudrate',    8000000);
     addParameter(p, 'duration',    15);        % секунд приёма
-    addParameter(p, 'accel_fs_g',  16);
-    addParameter(p, 'gyro_fs_dps', 2000);
+    addParameter(p, 'accel_fs_g',  32);
+    addParameter(p, 'gyro_fs_dps', 4000);
     addParameter(p, 'temp_scale',  1/128);
     addParameter(p, 'temp_offset', 25);
     addParameter(p, 'plot_sensor', 1);          % какой датчик (1..18) рисовать подробно
-    addParameter(p, 'save_raw',    true);       % сохранить сырой .bin рядом на всякий случай
+    addParameter(p, 'save_raw',    false);       % сохранить сырой .bin рядом на всякий случай
     parse(p, varargin{:});
     cfg = p.Results;
 
