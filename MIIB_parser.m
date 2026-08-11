@@ -76,7 +76,7 @@ function result = MIIB_run(varargin)
             raw(raw_len+1 : raw_len+n) = chunk;
             raw_len = raw_len + n;
         else
-            pause(0.0005);
+            pause(0.00005);
         end
 
         if toc(t_last_log) >= 1
