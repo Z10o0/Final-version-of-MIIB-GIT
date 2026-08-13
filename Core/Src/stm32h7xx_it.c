@@ -328,18 +328,93 @@ void SPI5_IRQHandler(void)
     }
 }
 
-/* ===========================================================================
- *  Неиспользуемые SPI / DMA / BDMA — заглушки (CubeMX vector table)
- * ========================================================================== */
-void SPI2_IRQHandler(void) {}
-void SPI3_IRQHandler(void) {}
-void SPI6_IRQHandler(void) {}
+void SPI2_IRQHandler(void)
+{
+    if ((LL_SPI_IsEnabledIT_EOT(SPI2) != 0U) && (LL_SPI_IsActiveFlag_EOT(SPI2) != 0U))
+    {
+        ICM_SPI_Eot_SPI2();
+    }
+    if (LL_SPI_IsActiveFlag_OVR(SPI2) != 0U) { LL_SPI_ClearFlag_OVR(SPI2); }
+}
+
+void SPI3_IRQHandler(void)
+{
+    if ((LL_SPI_IsEnabledIT_EOT(SPI3) != 0U) && (LL_SPI_IsActiveFlag_EOT(SPI3) != 0U))
+    {
+        ICM_SPI_Eot_SPI3();
+    }
+    if (LL_SPI_IsActiveFlag_OVR(SPI3) != 0U) { LL_SPI_ClearFlag_OVR(SPI3); }
+}
+
+void SPI6_IRQHandler(void)
+{
+    if ((LL_SPI_IsEnabledIT_EOT(SPI6) != 0U) && (LL_SPI_IsActiveFlag_EOT(SPI6) != 0U))
+    {
+        ICM_SPI_Eot_SPI6();
+    }
+    if (LL_SPI_IsActiveFlag_OVR(SPI6) != 0U) { LL_SPI_ClearFlag_OVR(SPI6); }
+}
 
 void DMA1_Stream0_IRQHandler(void) {}
-void DMA1_Stream4_IRQHandler(void) {}
-void DMA1_Stream5_IRQHandler(void) {}
-void DMA1_Stream6_IRQHandler(void) {}
-void DMA1_Stream7_IRQHandler(void) {}
+void DMA1_Stream4_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_TE4(DMA1) != 0U)
+    {
+        LL_DMA_ClearFlag_TE4(DMA1);
+        ICM_DMA_Error_SPI2();
+        return;
+    }
+    if (LL_DMA_IsActiveFlag_TC4(DMA1) != 0U)
+    {
+        LL_DMA_ClearFlag_TC4(DMA1);
+        ICM_DMA_RxComplete_SPI2();
+    }
+}
 
-void BDMA_Channel0_IRQHandler(void) {}
-void BDMA_Channel1_IRQHandler(void) {}
+void DMA1_Stream5_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_TE5(DMA1) != 0U) { LL_DMA_ClearFlag_TE5(DMA1); }
+    if (LL_DMA_IsActiveFlag_TC5(DMA1) != 0U) { LL_DMA_ClearFlag_TC5(DMA1); }
+}
+
+void DMA1_Stream6_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_TE6(DMA1) != 0U)
+    {
+        LL_DMA_ClearFlag_TE6(DMA1);
+        ICM_DMA_Error_SPI3();
+        return;
+    }
+    if (LL_DMA_IsActiveFlag_TC6(DMA1) != 0U)
+    {
+        LL_DMA_ClearFlag_TC6(DMA1);
+        ICM_DMA_RxComplete_SPI3();
+    }
+}
+
+void DMA1_Stream7_IRQHandler(void)
+{
+    if (LL_DMA_IsActiveFlag_TE7(DMA1) != 0U) { LL_DMA_ClearFlag_TE7(DMA1); }
+    if (LL_DMA_IsActiveFlag_TC7(DMA1) != 0U) { LL_DMA_ClearFlag_TC7(DMA1); }
+}
+
+void BDMA_Channel0_IRQHandler(void)
+{
+    if (LL_BDMA_IsActiveFlag_TE0(BDMA) != 0U)
+    {
+        LL_BDMA_ClearFlag_TE0(BDMA);
+        ICM_DMA_Error_SPI6();
+        return;
+    }
+    if (LL_BDMA_IsActiveFlag_TC0(BDMA) != 0U)
+    {
+        LL_BDMA_ClearFlag_TC0(BDMA);
+        ICM_DMA_RxComplete_SPI6();
+    }
+}
+
+void BDMA_Channel1_IRQHandler(void)
+{
+    if (LL_BDMA_IsActiveFlag_TE1(BDMA) != 0U) { LL_BDMA_ClearFlag_TE1(BDMA); }
+    if (LL_BDMA_IsActiveFlag_TC1(BDMA) != 0U) { LL_BDMA_ClearFlag_TC1(BDMA); }
+}

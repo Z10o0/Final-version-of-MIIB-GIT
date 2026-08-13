@@ -65,6 +65,9 @@ typedef struct
 #define ICM_EVT_BUS0_FAULT    (1UL << 1)
 #define ICM_EVT_BUS1_FAULT    (1UL << 2)
 #define ICM_EVT_BUS2_FAULT    (1UL << 3)
+#define ICM_EVT_BUS3_FAULT    (1UL << 6)
+#define ICM_EVT_BUS4_FAULT    (1UL << 7)
+#define ICM_EVT_BUS5_FAULT    (1UL << 8)
 #define ICM_EVT_DMA_TIMEOUT   (1UL << 4)
 #define ICM_EVT_FRAME_SKIP    (1UL << 5)
 
@@ -95,7 +98,9 @@ typedef struct
 typedef struct
 {
     SPI_TypeDef   *spi;
-    DMA_TypeDef   *dma;
+    DMA_TypeDef   *dma;         /* NULL для BDMA-шин */
+    BDMA_TypeDef  *bdma;        /* [NEW] используется только для SPI6 */
+    uint8_t        is_bdma;     /* [NEW] 1 = шина работает через BDMA */
     uint32_t       dma_stream_rx;
     uint32_t       dma_stream_tx;
     uint8_t       *tx_buf;
@@ -103,14 +108,14 @@ typedef struct
     ICM_Sensor_t   sensors[ICM_SENSORS_PER_BUS];
 
     volatile uint8_t  current_sensor_idx;
-    volatile uint8_t  transfer_complete;  /* оставлено для совместимости, не источник истины */
-    volatile uint8_t  eot_handled;        /* оставлено для совместимости, не источник истины */
+    volatile uint8_t  transfer_complete;
+    volatile uint8_t  eot_handled;
 
-    icm_dma_desc_t    dma_desc[ICM_SENSORS_PER_BUS]; /* [NEW] precomputed descriptors */
-    volatile icm_bus_state_t state;                  /* [NEW] явная FSM шины */
-    volatile uint32_t dma_start_cyc;                 /* [NEW] метка времени старта транзакции (DWT) */
-    volatile uint32_t timeout_count;                 /* [NEW] число watchdog-таймаутов на шине */
-    volatile uint32_t dma_error_count;                /* [NEW] число DMA/SPI ошибок на шине */
+    icm_dma_desc_t    dma_desc[ICM_SENSORS_PER_BUS];
+    volatile icm_bus_state_t state;
+    volatile uint32_t dma_start_cyc;
+    volatile uint32_t timeout_count;
+    volatile uint32_t dma_error_count;
 } ICM_Bus_t;
 
 /* ===========================================================================
@@ -121,7 +126,12 @@ extern ICM_Bus_t g_bus_spi1;
 extern ICM_Bus_t g_bus_spi5;
 extern ICM_Bus_t g_bus_spi4;
 
+extern ICM_Bus_t g_bus_spi2;
+extern ICM_Bus_t g_bus_spi3;
+extern ICM_Bus_t g_bus_spi6;
+
 extern uint8_t          g_fifo_data[ICM_SPI_BUS_COUNT][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE];
+extern uint8_t 			g_fifo_data_spi6[ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE];
 extern volatile uint8_t  g_fifo_batch_ready;
 extern volatile uint8_t  g_dma_cycle_active;
 extern volatile uint32_t g_sensor_fault_mask;
@@ -159,10 +169,23 @@ void ICM_DMA_Error_SPI1(void);
 void ICM_DMA_Error_SPI5(void);
 void ICM_DMA_Error_SPI4(void);
 
+/* DMA ISR обёртки — верхняя плата */
+void ICM_DMA_RxComplete_SPI2(void);
+void ICM_DMA_RxComplete_SPI3(void);
+void ICM_DMA_RxComplete_SPI6(void);
+void ICM_DMA_Error_SPI2(void);
+void ICM_DMA_Error_SPI3(void);
+void ICM_DMA_Error_SPI6(void);
+
 /* SPI EOT ISR обёртки */
 void ICM_SPI_Eot_SPI1(void);
 void ICM_SPI_Eot_SPI5(void);
 void ICM_SPI_Eot_SPI4(void);
+
+/* SPI EOT ISR обёртки — верхняя плата */
+void ICM_SPI_Eot_SPI2(void);
+void ICM_SPI_Eot_SPI3(void);
+void ICM_SPI_Eot_SPI6(void);
 
 #ifdef __cplusplus
 }

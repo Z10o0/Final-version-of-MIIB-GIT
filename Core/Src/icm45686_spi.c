@@ -59,9 +59,23 @@ icm_profile_t      g_icm_profile;       /* [NEW] DWT-профилировани�
 uint8_t g_fifo_data[ICM_SPI_BUS_COUNT][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE]
     __attribute__((section(".RAM_D2"), aligned(32)));
 
+/* [NEW] BDMA видит только D3 — общий g_fifo_data (RAM_D2) для SPI6 не подходит.
+ * Отдельный буфер в RAM_D3 для шины SPI6 (bus_idx = 5). */
+uint8_t g_fifo_data_spi6[ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE]
+    __attribute__((section(".RAM_D3"), aligned(32)));
+
 static uint8_t g_tx_spi1[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D2"), aligned(32)));
 static uint8_t g_tx_spi5[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D2"), aligned(32)));
 static uint8_t g_tx_spi4[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D2"), aligned(32)));
+
+/* верхняя плата — TX-шаблоны */
+static uint8_t g_tx_spi2[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D2"), aligned(32)));
+static uint8_t g_tx_spi3[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D2"), aligned(32)));
+
+/* SPI6 — BDMA работает ТОЛЬКО с доменом D3 (SRAM4).
+ * Секция .RAM_D3 должна быть объявлена в STM32H723ZGTX_RAM.ld,
+ * иначе линковка/выполнение будут некорректны (BDMA не увидит буфер). */
+static uint8_t g_tx_spi6[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D3"), aligned(32)));
 
 volatile uint8_t  g_fifo_batch_ready  = 0U;
 volatile uint8_t  g_dma_cycle_active  = 0U;
@@ -71,10 +85,17 @@ volatile uint32_t g_tim6_skip_count   = 0U;
 volatile uint32_t g_clk_ok_mask       = 0U;
 volatile uint32_t g_clk_fail_mask     = 0U;
 
+/* ===========================================================================
+ *  Дескрипторы шин — НИЖНЯЯ плата (SPI1, SPI5, SPI4), без изменений топологии,
+ *  добавлены только новые поля bdma/is_bdma = 0 (обычный DMA1/DMA2).
+ * ========================================================================== */
+
 ICM_Bus_t g_bus_spi1 =
 {
     .spi           = SPI1,
     .dma           = DMA1,
+    .bdma          = NULL,
+    .is_bdma       = 0U,
     .dma_stream_rx = LL_DMA_STREAM_2,
     .dma_stream_tx = LL_DMA_STREAM_3,
     .tx_buf        = g_tx_spi1,
@@ -95,6 +116,8 @@ ICM_Bus_t g_bus_spi5 =
 {
     .spi           = SPI5,
     .dma           = DMA2,
+    .bdma          = NULL,
+    .is_bdma       = 0U,
     .dma_stream_rx = LL_DMA_STREAM_2,
     .dma_stream_tx = LL_DMA_STREAM_3,
     .tx_buf        = g_tx_spi5,
@@ -115,6 +138,8 @@ ICM_Bus_t g_bus_spi4 =
 {
     .spi           = SPI4,
     .dma           = DMA2,
+    .bdma          = NULL,
+    .is_bdma       = 0U,
     .dma_stream_rx = LL_DMA_STREAM_0,
     .dma_stream_tx = LL_DMA_STREAM_1,
     .tx_buf        = g_tx_spi4,
@@ -128,6 +153,79 @@ ICM_Bus_t g_bus_spi4 =
         { SPI4, GPIOG, LL_GPIO_PIN_0,  15U, 0U },
         { SPI4, GPIOC, LL_GPIO_PIN_4,  16U, 0U },
         { SPI4, GPIOC, LL_GPIO_PIN_5,  17U, 0U }
+    }
+};
+
+/* ===========================================================================
+ *  Дескрипторы шин — ВЕРХНЯЯ плата (SPI3, SPI2, SPI6)
+ *  Пины и порядок CS строго по Таблице 2 (Распиновка подключения плат.docx).
+ * ========================================================================== */
+
+ICM_Bus_t g_bus_spi3 =
+{
+    .spi           = SPI3,
+    .dma           = DMA1,
+    .bdma          = NULL,
+    .is_bdma       = 0U,
+    .dma_stream_rx = LL_DMA_STREAM_6,
+    .dma_stream_tx = LL_DMA_STREAM_7,
+    .tx_buf        = g_tx_spi3,
+    .state         = BUS_IDLE,
+    .eot_handled   = 0U,
+    .sensors =
+    {
+        { SPI3, GPIOD, LL_GPIO_PIN_0, 18U, 0U },
+        { SPI3, GPIOD, LL_GPIO_PIN_1, 19U, 0U },
+        { SPI3, GPIOD, LL_GPIO_PIN_6, 20U, 0U },
+        { SPI3, GPIOD, LL_GPIO_PIN_7, 21U, 0U },
+        { SPI3, GPIOB, LL_GPIO_PIN_8, 22U, 0U },
+        { SPI3, GPIOE, LL_GPIO_PIN_0, 23U, 0U }
+    }
+};
+
+ICM_Bus_t g_bus_spi2 =
+{
+    .spi           = SPI2,
+    .dma           = DMA1,
+    .bdma          = NULL,
+    .is_bdma       = 0U,
+    .dma_stream_rx = LL_DMA_STREAM_4,
+    .dma_stream_tx = LL_DMA_STREAM_5,
+    .tx_buf        = g_tx_spi2,
+    .state         = BUS_IDLE,
+    .eot_handled   = 0U,
+    .sensors =
+    {
+        { SPI2, GPIOA, LL_GPIO_PIN_9,  24U, 0U },
+        { SPI2, GPIOA, LL_GPIO_PIN_10, 25U, 0U },
+        { SPI2, GPIOD, LL_GPIO_PIN_4,  26U, 0U },
+        { SPI2, GPIOD, LL_GPIO_PIN_5,  27U, 0U },
+        { SPI2, GPIOB, LL_GPIO_PIN_3,  28U, 0U },
+        { SPI2, GPIOB, LL_GPIO_PIN_4,  29U, 0U }
+    }
+};
+
+/* SPI6 — единственная шина на BDMA (домен D3, буферы обязаны лежать в SRAM4 /
+ * секция .RAM_D3). dma = NULL, bdma = BDMA, is_bdma = 1U. */
+ICM_Bus_t g_bus_spi6 =
+{
+    .spi           = SPI6,
+    .dma           = NULL,
+    .bdma          = BDMA,
+    .is_bdma       = 1U,
+    .dma_stream_rx = LL_BDMA_CHANNEL_0,
+    .dma_stream_tx = LL_BDMA_CHANNEL_1,
+    .tx_buf        = g_tx_spi6,
+    .state         = BUS_IDLE,
+    .eot_handled   = 0U,
+    .sensors =
+    {
+        { SPI6, GPIOA, LL_GPIO_PIN_8,  30U, 0U },
+        { SPI6, GPIOC, LL_GPIO_PIN_9,  31U, 0U },
+        { SPI6, GPIOD, LL_GPIO_PIN_2,  32U, 0U },
+        { SPI6, GPIOD, LL_GPIO_PIN_3,  33U, 0U },
+        { SPI6, GPIOG, LL_GPIO_PIN_9,  34U, 0U },
+        { SPI6, GPIOG, LL_GPIO_PIN_15, 35U, 0U }
     }
 };
 
@@ -166,33 +264,63 @@ void ICM_BusesInit(void)
     g_bus_spi5.tx_buf = g_tx_spi5;
     g_bus_spi4.tx_buf = g_tx_spi4;
 
+    g_bus_spi2.tx_buf = g_tx_spi2;   /* [NEW] */
+    g_bus_spi3.tx_buf = g_tx_spi3;   /* [NEW] */
+    g_bus_spi6.tx_buf = g_tx_spi6;   /* [NEW] */
     /* memset здесь — INIT-TIME, не hot path, поэтому остаётся без изменений.
      * Runtime memset() в ICM_StartBusRead() убран полностью (см. ниже):
      * TX-шаблон формируется один раз и больше никогда не перезаписывается. */
     memset(g_fifo_data, 0x00U, sizeof(g_fifo_data));
+    memset(g_fifo_data_spi6, 0x00U, sizeof(g_fifo_data_spi6));  /* [NEW] */
+
     memset(g_tx_spi1,   0xFFU, sizeof(g_tx_spi1));
     memset(g_tx_spi5,   0xFFU, sizeof(g_tx_spi5));
     memset(g_tx_spi4,   0xFFU, sizeof(g_tx_spi4));
 
+    memset(g_tx_spi2, 0xFFU, sizeof(g_tx_spi2));   /* [NEW] */
+    memset(g_tx_spi3, 0xFFU, sizeof(g_tx_spi3));   /* [NEW] */
+    memset(g_tx_spi6, 0xFFU, sizeof(g_tx_spi6));   /* [NEW] */
+
     g_tx_spi1[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
     g_tx_spi5[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
     g_tx_spi4[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
+
+    g_tx_spi2[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;  /* [NEW] */
+    g_tx_spi3[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;  /* [NEW] */
+    g_tx_spi6[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;  /* [NEW] */
 
     for (i = 0U; i < ICM_SENSORS_PER_BUS; i++)
     {
         ICM_CS_High(&g_bus_spi1.sensors[i]);
         ICM_CS_High(&g_bus_spi5.sensors[i]);
         ICM_CS_High(&g_bus_spi4.sensors[i]);
-        g_bus_spi1.sensors[i].fault           = 0U;
-        g_bus_spi5.sensors[i].fault           = 0U;
-        g_bus_spi4.sensors[i].fault           = 0U;
-        g_bus_spi1.sensors[i].fault_count     = 0U;   /* [NEW] */
-        g_bus_spi5.sensors[i].fault_count     = 0U;   /* [NEW] */
-        g_bus_spi4.sensors[i].fault_count     = 0U;   /* [NEW] */
-        g_bus_spi1.sensors[i].reint_countdown = 0U;   /* [NEW] */
-        g_bus_spi5.sensors[i].reint_countdown = 0U;   /* [NEW] */
-        g_bus_spi4.sensors[i].reint_countdown = 0U;   /* [NEW] */
+
+        ICM_CS_High(&g_bus_spi2.sensors[i]);   /* [NEW] */
+        ICM_CS_High(&g_bus_spi3.sensors[i]);   /* [NEW] */
+        ICM_CS_High(&g_bus_spi6.sensors[i]);   /* [NEW] */
+
+        g_bus_spi1.sensors[i].fault = 0U;
+        g_bus_spi5.sensors[i].fault = 0U;
+        g_bus_spi4.sensors[i].fault = 0U;
+        g_bus_spi2.sensors[i].fault = 0U;
+        g_bus_spi3.sensors[i].fault = 0U;
+        g_bus_spi6.sensors[i].fault = 0U;
+
+        g_bus_spi1.sensors[i].fault_count = 0U;
+        g_bus_spi5.sensors[i].fault_count = 0U;
+        g_bus_spi4.sensors[i].fault_count = 0U;
+        g_bus_spi2.sensors[i].fault_count = 0U;
+        g_bus_spi3.sensors[i].fault_count = 0U;
+        g_bus_spi6.sensors[i].fault_count = 0U;
+
+        g_bus_spi1.sensors[i].reint_countdown = 0U;
+        g_bus_spi5.sensors[i].reint_countdown = 0U;
+        g_bus_spi4.sensors[i].reint_countdown = 0U;
+        g_bus_spi2.sensors[i].reint_countdown = 0U;
+        g_bus_spi3.sensors[i].reint_countdown = 0U;
+        g_bus_spi6.sensors[i].reint_countdown = 0U;
     }
+
 
     /* [NEW] Precompute DMA descriptors — устраняет runtime address math
      * из hot path ICM_StartBusRead(). */
@@ -200,28 +328,68 @@ void ICM_BusesInit(void)
     ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi5, 1U);
     ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi4, 2U);
 
+    ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi2, 3U);   /* [NEW] */
+    ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi3, 4U);   /* [NEW] */
+    /* SPI6 использует ОТДЕЛЬНЫЙ буфер g_fifo_data_spi6, не g_fifo_data[5][...] —
+     * прекомпутация для него делается вручную: */
+    for (i = 0U; i < ICM_SENSORS_PER_BUS; i++)
+    {
+        g_bus_spi6.dma_desc[i].rx_mem_addr = (uint32_t)g_fifo_data_spi6[i];
+        g_bus_spi6.dma_desc[i].tx_mem_addr = (uint32_t)g_bus_spi6.tx_buf;
+        g_bus_spi6.dma_desc[i].length      = (uint16_t)ICM_FIFO_DMA_BUF_SIZE;
+    }
+
     /* [REWRITE v2] Явная FSM вместо разрозненных флагов */
     g_bus_spi1.state              = BUS_IDLE;
     g_bus_spi5.state              = BUS_IDLE;
     g_bus_spi4.state              = BUS_IDLE;
+
+    g_bus_spi2.state 			  = BUS_IDLE;
+    g_bus_spi3.state 			  = BUS_IDLE;
+    g_bus_spi6.state 			  = BUS_IDLE;
+
     g_bus_spi1.current_sensor_idx = 0U;
     g_bus_spi5.current_sensor_idx = 0U;
     g_bus_spi4.current_sensor_idx = 0U;
+
+    g_bus_spi2.current_sensor_idx = 0U;
+    g_bus_spi3.current_sensor_idx = 0U;
+    g_bus_spi6.current_sensor_idx = 0U;
+
     g_bus_spi1.timeout_count      = 0U;   /* [NEW] */
     g_bus_spi5.timeout_count      = 0U;   /* [NEW] */
     g_bus_spi4.timeout_count      = 0U;   /* [NEW] */
+
+    g_bus_spi2.timeout_count      = 0U;   /* [NEW] */
+    g_bus_spi3.timeout_count      = 0U;   /* [NEW] */
+    g_bus_spi6.timeout_count      = 0U;   /* [NEW] */
+
     g_bus_spi1.dma_error_count    = 0U;   /* [NEW] */
     g_bus_spi5.dma_error_count    = 0U;   /* [NEW] */
     g_bus_spi4.dma_error_count    = 0U;   /* [NEW] */
+
+    g_bus_spi2.dma_error_count    = 0U;   /* [NEW] */
+    g_bus_spi3.dma_error_count    = 0U;   /* [NEW] */
+    g_bus_spi6.dma_error_count    = 0U;   /* [NEW] */
 
     /* Оставлено для совместимости со старым кодом отладки/телеметрии.
      * Новой acquisition-логикой уже не читается как источник истины. */
     g_bus_spi1.transfer_complete  = 0U;
     g_bus_spi5.transfer_complete  = 0U;
     g_bus_spi4.transfer_complete  = 0U;
+
+    g_bus_spi2.transfer_complete  = 0U;
+    g_bus_spi3.transfer_complete  = 0U;
+    g_bus_spi6.transfer_complete  = 0U;
+
     g_bus_spi1.eot_handled        = 0U;
     g_bus_spi5.eot_handled        = 0U;
     g_bus_spi4.eot_handled        = 0U;
+
+    g_bus_spi2.eot_handled        = 0U;
+    g_bus_spi3.eot_handled        = 0U;
+    g_bus_spi6.eot_handled        = 0U;
+
 
     g_icm_events        = 0U;   /* [NEW] */
     g_fifo_batch_ready  = 0U;
@@ -643,41 +811,49 @@ uint32_t ICM_InitAllSensors(void)
 
 void ICM_StartBurstRead(void)
 {
-    uint8_t first1, first5, first4;
+    uint8_t first1, first5, first4, first2, first3, first6;
 
-    g_icm_profile.tim6_total++;   /* [NEW] */
+    g_icm_profile.tim6_total++;
 
-    /* [REWRITE v2] Занятость цикла определяется через bus->state,
-     * а не через пару неатомарных флагов g_fifo_batch_ready/g_dma_cycle_active.
-     * Цикл считается активным, если хотя бы одна шина не в BUS_IDLE. */
-    if ((g_bus_spi1.state != BUS_IDLE) ||
-        (g_bus_spi5.state != BUS_IDLE) ||
-        (g_bus_spi4.state != BUS_IDLE))
+    if ((g_bus_spi1.state != BUS_IDLE) || (g_bus_spi5.state != BUS_IDLE) ||
+        (g_bus_spi4.state != BUS_IDLE) || (g_bus_spi2.state != BUS_IDLE) ||
+        (g_bus_spi3.state != BUS_IDLE) || (g_bus_spi6.state != BUS_IDLE))
     {
         g_tim6_skip_count++;
-        g_icm_profile.frame_skip_count++;                 /* [NEW] */
-        ICM_SetEvent(ICM_EVT_FRAME_SKIP);                  /* [NEW] */
+        g_icm_profile.frame_skip_count++;
+        ICM_SetEvent(ICM_EVT_FRAME_SKIP);
         return;
     }
 
-    g_icm_profile.acq_start_cyc = DWT->CYCCNT;              /* [NEW] */
+    g_icm_profile.acq_start_cyc = DWT->CYCCNT;
 
-    /* Совместимость со старым кодом отладки/телеметрии */
     g_dma_cycle_active = 1U;
     g_fifo_batch_ready  = 0U;
 
     first1 = ICM_FindNextHealthy(&g_bus_spi1, 0U);
     first5 = ICM_FindNextHealthy(&g_bus_spi5, 0U);
     first4 = ICM_FindNextHealthy(&g_bus_spi4, 0U);
+    first2 = ICM_FindNextHealthy(&g_bus_spi2, 0U);   /* [NEW] */
+    first3 = ICM_FindNextHealthy(&g_bus_spi3, 0U);   /* [NEW] */
+    first6 = ICM_FindNextHealthy(&g_bus_spi6, 0U);   /* [NEW] */
 
     if (first1 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi1, first1); }
-    else                               { g_bus_spi1.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi1); }
+    else { g_bus_spi1.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi1); }
 
     if (first5 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi5, first5); }
-    else                               { g_bus_spi5.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi5); }
+    else { g_bus_spi5.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi5); }
 
     if (first4 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi4, first4); }
-    else                               { g_bus_spi4.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi4); }
+    else { g_bus_spi4.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi4); }
+
+    if (first2 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi2, first2); }
+    else { g_bus_spi2.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi2); }
+
+    if (first3 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi3, first3); }
+    else { g_bus_spi3.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi3); }
+
+    if (first6 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi6, first6); }
+    else { g_bus_spi6.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi6); }
 }
 
 void ICM_StartBurstRead_SPI1(void) { ICM_StartBurstRead(); }
@@ -690,6 +866,10 @@ void ICM_StartBurstRead_SPI1(void) { ICM_StartBurstRead(); }
 void ICM_DMA_RxComplete_SPI1(void) { ICM_OnDmaRxComplete(&g_bus_spi1); }
 void ICM_DMA_RxComplete_SPI5(void) { ICM_OnDmaRxComplete(&g_bus_spi5); }
 void ICM_DMA_RxComplete_SPI4(void) { ICM_OnDmaRxComplete(&g_bus_spi4); }
+
+void ICM_DMA_RxComplete_SPI2(void) { ICM_OnDmaRxComplete(&g_bus_spi2); }
+void ICM_DMA_RxComplete_SPI3(void) { ICM_OnDmaRxComplete(&g_bus_spi3); }
+void ICM_DMA_RxComplete_SPI6(void) { ICM_OnDmaRxComplete(&g_bus_spi6); }
 
 void ICM_DMA_Error_SPI1(void)
 {
@@ -713,9 +893,35 @@ void ICM_DMA_Error_SPI4(void)
     ICM_RecoverBus(&g_bus_spi4);
 }
 
+void ICM_DMA_Error_SPI2(void)
+{
+    g_dma_error_mask |= (1UL << 3U);
+    g_bus_spi2.dma_error_count++;
+    g_bus_spi2.state = BUS_ERROR;
+    ICM_RecoverBus(&g_bus_spi2);
+}
+void ICM_DMA_Error_SPI3(void)
+{
+    g_dma_error_mask |= (1UL << 4U);
+    g_bus_spi3.dma_error_count++;
+    g_bus_spi3.state = BUS_ERROR;
+    ICM_RecoverBus(&g_bus_spi3);
+}
+void ICM_DMA_Error_SPI6(void)
+{
+    g_dma_error_mask |= (1UL << 5U);
+    g_bus_spi6.dma_error_count++;
+    g_bus_spi6.state = BUS_ERROR;
+    ICM_RecoverBus(&g_bus_spi6);
+}
+
 void ICM_SPI_Eot_SPI1(void) { ICM_OnSpiEot(&g_bus_spi1); }
 void ICM_SPI_Eot_SPI5(void) { ICM_OnSpiEot(&g_bus_spi5); }
 void ICM_SPI_Eot_SPI4(void) { ICM_OnSpiEot(&g_bus_spi4); }
+
+void ICM_SPI_Eot_SPI2(void) { ICM_OnSpiEot(&g_bus_spi2); }
+void ICM_SPI_Eot_SPI3(void) { ICM_OnSpiEot(&g_bus_spi3); }
+void ICM_SPI_Eot_SPI6(void) { ICM_OnSpiEot(&g_bus_spi6); }
 
 /* ----------------------------------------------------------------------------
  * ICM_StartBusRead — [REWRITE v2]
@@ -740,40 +946,85 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     bus->current_sensor_idx = idx;
     bus->eot_handled         = 0U; /* совместимость */
 
-    LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
-    LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
-
-    /* [REWRITE v2] Timeout-bounded wait вместо бесконечного busy-wait */
-    spin = 2000U;
-    while ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_rx) != 0U) && (spin != 0U)) { spin--; }
-    spin = 2000U;
-    while ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_tx) != 0U) && (spin != 0U)) { spin--; }
-
-    if ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_rx) != 0U) ||
-        (LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_tx) != 0U))
+    /* ------------------------------------------------------------------
+     * [NEW] Отключение потока/канала — ветвление DMA vs BDMA.
+     * SPI6 обслуживается BDMA (домен D3), остальные — DMA1/DMA2.
+     * ------------------------------------------------------------------ */
+    if (bus->is_bdma)
     {
-        bus->state = BUS_ERROR;
-        ICM_RecoverBus(bus);
-        return;
+        LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_rx);
+        LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_tx);
+
+        /* [REWRITE v2] Timeout-bounded wait — аналогично DMA-ветке */
+        spin = 2000U;
+        while ((LL_BDMA_IsEnabledChannel(bus->bdma, bus->dma_stream_rx) != 0U) && (spin != 0U)) { spin--; }
+        spin = 2000U;
+        while ((LL_BDMA_IsEnabledChannel(bus->bdma, bus->dma_stream_tx) != 0U) && (spin != 0U)) { spin--; }
+
+        if ((LL_BDMA_IsEnabledChannel(bus->bdma, bus->dma_stream_rx) != 0U) ||
+            (LL_BDMA_IsEnabledChannel(bus->bdma, bus->dma_stream_tx) != 0U))
+        {
+            bus->state = BUS_ERROR;
+            ICM_RecoverBus(bus);
+            return;
+        }
+    }
+    else
+    {
+        LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
+        LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
+
+        /* [REWRITE v2] Timeout-bounded wait вместо бесконечного busy-wait */
+        spin = 2000U;
+        while ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_rx) != 0U) && (spin != 0U)) { spin--; }
+        spin = 2000U;
+        while ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_tx) != 0U) && (spin != 0U)) { spin--; }
+
+        if ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_rx) != 0U) ||
+            (LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_tx) != 0U))
+        {
+            bus->state = BUS_ERROR;
+            ICM_RecoverBus(bus);
+            return;
+        }
     }
 
-    ICM_ClearDmaFlags(bus);
+    ICM_ClearDmaFlags(bus);   /* уже ветвится по is_bdma внутри — без изменений здесь */
 
-    /* [REWRITE v2] БЕЗ memset — RX полностью перезаписывается DMA,
+    /* [REWRITE v2] БЕЗ memset — RX полностью перезаписывается DMA/BDMA,
      * TX-шаблон уже содержит команду FIFO_DATA|READ в байте 0 и 0xFF
      * во всех остальных байтах (сформирован один раз в ICM_BusesInit). */
-    LL_DMA_SetPeriphAddress(bus->dma, bus->dma_stream_rx,
-                            LL_SPI_DMA_GetRxRegAddr(bus->spi));
-    LL_DMA_SetMemoryAddress(bus->dma, bus->dma_stream_rx, desc->rx_mem_addr);
-    LL_DMA_SetDataLength   (bus->dma, bus->dma_stream_rx, desc->length);
+    if (bus->is_bdma)
+    {
+        LL_BDMA_SetPeriphAddress(bus->bdma, bus->dma_stream_rx,
+                                 LL_SPI_DMA_GetRxRegAddr(bus->spi));
+        LL_BDMA_SetMemoryAddress(bus->bdma, bus->dma_stream_rx, desc->rx_mem_addr);
+        LL_BDMA_SetDataLength   (bus->bdma, bus->dma_stream_rx, desc->length);
 
-    LL_DMA_SetPeriphAddress(bus->dma, bus->dma_stream_tx,
-                            LL_SPI_DMA_GetTxRegAddr(bus->spi));
-    LL_DMA_SetMemoryAddress(bus->dma, bus->dma_stream_tx, desc->tx_mem_addr);
-    LL_DMA_SetDataLength   (bus->dma, bus->dma_stream_tx, desc->length);
+        LL_BDMA_SetPeriphAddress(bus->bdma, bus->dma_stream_tx,
+                                 LL_SPI_DMA_GetTxRegAddr(bus->spi));
+        LL_BDMA_SetMemoryAddress(bus->bdma, bus->dma_stream_tx, desc->tx_mem_addr);
+        LL_BDMA_SetDataLength   (bus->bdma, bus->dma_stream_tx, desc->length);
 
-    LL_DMA_EnableIT_TC(bus->dma, bus->dma_stream_rx);
-    LL_DMA_EnableIT_TE(bus->dma, bus->dma_stream_rx);
+        LL_BDMA_EnableIT_TC(bus->bdma, bus->dma_stream_rx);
+        LL_BDMA_EnableIT_TE(bus->bdma, bus->dma_stream_rx);
+    }
+    else
+    {
+        LL_DMA_SetPeriphAddress(bus->dma, bus->dma_stream_rx,
+                                LL_SPI_DMA_GetRxRegAddr(bus->spi));
+        LL_DMA_SetMemoryAddress(bus->dma, bus->dma_stream_rx, desc->rx_mem_addr);
+        LL_DMA_SetDataLength   (bus->dma, bus->dma_stream_rx, desc->length);
+
+        LL_DMA_SetPeriphAddress(bus->dma, bus->dma_stream_tx,
+                                LL_SPI_DMA_GetTxRegAddr(bus->spi));
+        LL_DMA_SetMemoryAddress(bus->dma, bus->dma_stream_tx, desc->tx_mem_addr);
+        LL_DMA_SetDataLength   (bus->dma, bus->dma_stream_tx, desc->length);
+
+        LL_DMA_EnableIT_TC(bus->dma, bus->dma_stream_rx);
+        LL_DMA_EnableIT_TE(bus->dma, bus->dma_stream_rx);
+    }
+
     LL_SPI_DisableIT_EOT(bus->spi);
 
     ICM_CS_Low(sensor);
@@ -788,8 +1039,19 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     LL_SPI_SetTransferSize(bus->spi, desc->length);
     LL_SPI_SetInternalSSLevel(bus->spi, LL_SPI_SS_LEVEL_HIGH);
 
-    LL_DMA_EnableStream(bus->dma, bus->dma_stream_rx);
-    LL_DMA_EnableStream(bus->dma, bus->dma_stream_tx);
+    /* ------------------------------------------------------------------
+     * [NEW] Включение потока/канала — ветвление DMA vs BDMA.
+     * ------------------------------------------------------------------ */
+    if (bus->is_bdma)
+    {
+        LL_BDMA_EnableChannel(bus->bdma, bus->dma_stream_rx);
+        LL_BDMA_EnableChannel(bus->bdma, bus->dma_stream_tx);
+    }
+    else
+    {
+        LL_DMA_EnableStream(bus->dma, bus->dma_stream_rx);
+        LL_DMA_EnableStream(bus->dma, bus->dma_stream_tx);
+    }
 
     LL_SPI_EnableDMAReq_RX(bus->spi);
     LL_SPI_EnableDMAReq_TX(bus->spi);
@@ -888,26 +1150,25 @@ static void ICM_FinishBus(ICM_Bus_t *bus)
  * событие BATCH_READY выставляется атомарно через ICM_SetEvent(). */
 static void ICM_TryCompleteBatch(void)
 {
-    if ((g_bus_spi1.state == BUS_COMPLETE) &&
-        (g_bus_spi5.state == BUS_COMPLETE) &&
-        (g_bus_spi4.state == BUS_COMPLETE))
+    if ((g_bus_spi1.state == BUS_COMPLETE) && (g_bus_spi5.state == BUS_COMPLETE) &&
+        (g_bus_spi4.state == BUS_COMPLETE) && (g_bus_spi2.state == BUS_COMPLETE) &&
+        (g_bus_spi3.state == BUS_COMPLETE) && (g_bus_spi6.state == BUS_COMPLETE))
     {
-        g_icm_profile.acq_end_cyc     = DWT->CYCCNT;                              /* [NEW] */
-        g_icm_profile.acq_lat_last_us = ICM_DWT_ElapsedUs(g_icm_profile.acq_start_cyc); /* [NEW] */
+        g_icm_profile.acq_end_cyc     = DWT->CYCCNT;
+        g_icm_profile.acq_lat_last_us = ICM_DWT_ElapsedUs(g_icm_profile.acq_start_cyc);
         if (g_icm_profile.acq_lat_last_us > g_icm_profile.acq_lat_max_us)
         {
             g_icm_profile.acq_lat_max_us = g_icm_profile.acq_lat_last_us;
         }
         g_icm_profile.batch_count++;
 
-        g_bus_spi1.state = BUS_IDLE;
-        g_bus_spi5.state = BUS_IDLE;
-        g_bus_spi4.state = BUS_IDLE;
+        g_bus_spi1.state = BUS_IDLE; g_bus_spi5.state = BUS_IDLE; g_bus_spi4.state = BUS_IDLE;
+        g_bus_spi2.state = BUS_IDLE; g_bus_spi3.state = BUS_IDLE; g_bus_spi6.state = BUS_IDLE;
 
         g_dma_cycle_active = 0U;
         g_fifo_batch_ready  = 1U;
 
-        ICM_SetEvent(ICM_EVT_BATCH_READY);   /* [NEW] */
+        ICM_SetEvent(ICM_EVT_BATCH_READY);
     }
 }
 
@@ -952,7 +1213,10 @@ static void ICM_RecoverBus(ICM_Bus_t *bus)
 
     if      (bus == &g_bus_spi1) { ICM_SetEvent(ICM_EVT_BUS0_FAULT); }
     else if (bus == &g_bus_spi5) { ICM_SetEvent(ICM_EVT_BUS1_FAULT); }
-    else                          { ICM_SetEvent(ICM_EVT_BUS2_FAULT); }
+    else if (bus == &g_bus_spi4) { ICM_SetEvent(ICM_EVT_BUS2_FAULT); }
+    else if (bus == &g_bus_spi2) { ICM_SetEvent(ICM_EVT_BUS3_FAULT); }   /* [NEW] */
+    else if (bus == &g_bus_spi3) { ICM_SetEvent(ICM_EVT_BUS4_FAULT); }   /* [NEW] */
+    else                          { ICM_SetEvent(ICM_EVT_BUS5_FAULT); }  /* [NEW] SPI6 */
 
     next_idx = ICM_FindNextHealthy(bus, (uint8_t)(idx + 1U));
     if (next_idx < ICM_SENSORS_PER_BUS)
@@ -1082,6 +1346,15 @@ static uint8_t ICM_FindNextHealthy(const ICM_Bus_t *bus, uint8_t from)
 
 static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
 {
+    if (bus->is_bdma)   /* [NEW] SPI6 */
+    {
+        LL_BDMA_ClearFlag_TC0(BDMA); LL_BDMA_ClearFlag_HT0(BDMA);
+        LL_BDMA_ClearFlag_TE0(BDMA);
+        LL_BDMA_ClearFlag_TC1(BDMA); LL_BDMA_ClearFlag_HT1(BDMA);
+        LL_BDMA_ClearFlag_TE1(BDMA);
+        return;
+    }
+
     if (bus == &g_bus_spi1)
     {
         LL_DMA_ClearFlag_TC2(DMA1); LL_DMA_ClearFlag_HT2(DMA1);
@@ -1100,7 +1373,7 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
         LL_DMA_ClearFlag_TE3(DMA2); LL_DMA_ClearFlag_DME3(DMA2);
         LL_DMA_ClearFlag_FE3(DMA2);
     }
-    else
+    else if (bus == &g_bus_spi4)
     {
         LL_DMA_ClearFlag_TC0(DMA2); LL_DMA_ClearFlag_HT0(DMA2);
         LL_DMA_ClearFlag_TE0(DMA2); LL_DMA_ClearFlag_DME0(DMA2);
@@ -1109,7 +1382,25 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
         LL_DMA_ClearFlag_TE1(DMA2); LL_DMA_ClearFlag_DME1(DMA2);
         LL_DMA_ClearFlag_FE1(DMA2);
     }
-}
+    else if (bus->spi == SPI2)   /* [NEW] */
+        {
+            LL_DMA_ClearFlag_TC4(DMA1); LL_DMA_ClearFlag_HT4(DMA1);
+            LL_DMA_ClearFlag_TE4(DMA1); LL_DMA_ClearFlag_DME4(DMA1);
+            LL_DMA_ClearFlag_FE4(DMA1);
+            LL_DMA_ClearFlag_TC5(DMA1); LL_DMA_ClearFlag_HT5(DMA1);
+            LL_DMA_ClearFlag_TE5(DMA1); LL_DMA_ClearFlag_DME5(DMA1);
+            LL_DMA_ClearFlag_FE5(DMA1);
+        }
+        else if (bus->spi == SPI3)   /* [NEW] */
+        {
+            LL_DMA_ClearFlag_TC6(DMA1); LL_DMA_ClearFlag_HT6(DMA1);
+            LL_DMA_ClearFlag_TE6(DMA1); LL_DMA_ClearFlag_DME6(DMA1);
+            LL_DMA_ClearFlag_FE6(DMA1);
+            LL_DMA_ClearFlag_TC7(DMA1); LL_DMA_ClearFlag_HT7(DMA1);
+            LL_DMA_ClearFlag_TE7(DMA1); LL_DMA_ClearFlag_DME7(DMA1);
+            LL_DMA_ClearFlag_FE7(DMA1);
+        }
+    }
 
 /* ----------------------------------------------------------------------------
  * [REWRITE v2] ICM_SPI_EnsureDisabled — ограниченный timeout вместо

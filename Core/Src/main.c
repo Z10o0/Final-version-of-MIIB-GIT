@@ -121,18 +121,15 @@ int main(void)
   //LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
 
   MX_DMA_Init();
-
-  /* [REMOVED] MX_BDMA_Init(), MX_SPI6_Init(), MX_SPI3_Init(), MX_SPI2_Init() —
-   * эти периферии не участвуют в acquisition pipeline (используются только
-   * SPI1/SPI5/SPI4 + DMA1/DMA2). Их инициализация увеличивала init-time
-   * overhead и расширяла fault surface без функциональной пользы.
-   * Функции MX_SPI2_Init()/MX_SPI3_Init()/MX_SPI6_Init()/MX_BDMA_Init()
-   * оставлены в файле ниже (на случай будущего использования), но не
-   * вызываются. */
+  MX_BDMA_Init();   /* [NEW] обязательно — раньше была не нужна */
 
   MX_SPI1_Init();
   MX_SPI5_Init();
   MX_SPI4_Init();
+
+  MX_SPI2_Init();   /* [NEW] раскомментировать */
+  MX_SPI3_Init();   /* [NEW] раскомментировать */
+  MX_SPI6_Init();   /* [NEW] раскомментировать */
 
   MX_TIM6_Init();
   MX_TIM7_Init();
