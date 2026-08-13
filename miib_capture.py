@@ -16,7 +16,7 @@ def parse_args():
     p = argparse.ArgumentParser(description="High-speed RAW serial capture for MIIB stream")
     p.add_argument("--port", required=True, help="COM port, e.g. COM3")
     p.add_argument("--baud", type=int, default=12000000, help="Baud rate")
-    p.add_argument("--duration", type=float, default=10.0, help="Capture duration in seconds")
+    p.add_argument("--duration", type=float, default=30.0, help="Capture duration in seconds")
     p.add_argument("--outfile", default="", help="Output .bin file path")
     p.add_argument("--frames-per-batch", type=int, default=16)
     p.add_argument("--frame-len", type=int, default=348)
