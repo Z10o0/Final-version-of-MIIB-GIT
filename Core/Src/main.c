@@ -414,6 +414,9 @@ static void MX_SPI2_Init(void)
 
   LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOC);
   LL_AHB4_GRP1_EnableClock(LL_AHB4_GRP1_PERIPH_GPIOB);
+
+  // ▼▼▼ ДОБАВИТЬ: подключить PC2_C к GPIO-матрице ▼▼▼
+  LL_SYSCFG_CloseAnalogSwitch(LL_SYSCFG_ANALOG_SWITCH_PC2);
   /**SPI2 GPIO Configuration
   PC1   ------> SPI2_MOSI
   PC2_C   ------> SPI2_MISO
@@ -493,6 +496,7 @@ static void MX_SPI2_Init(void)
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
+  LL_SPI_Disable(SPI2);
   LL_SPI_Init(SPI2, &SPI_InitStruct);
   LL_SPI_SetStandard(SPI2, LL_SPI_PROTOCOL_MOTOROLA);
   LL_SPI_SetFIFOThreshold(SPI2, LL_SPI_FIFO_TH_01DATA);
@@ -605,6 +609,7 @@ static void MX_SPI3_Init(void)
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
+  LL_SPI_Disable(SPI3);
   LL_SPI_Init(SPI3, &SPI_InitStruct);
   LL_SPI_SetStandard(SPI3, LL_SPI_PROTOCOL_MOTOROLA);
   LL_SPI_SetFIFOThreshold(SPI3, LL_SPI_FIFO_TH_01DATA);
@@ -921,6 +926,7 @@ static void MX_SPI6_Init(void)
   SPI_InitStruct.BitOrder = LL_SPI_MSB_FIRST;
   SPI_InitStruct.CRCCalculation = LL_SPI_CRCCALCULATION_DISABLE;
   SPI_InitStruct.CRCPoly = 0x0;
+  LL_SPI_Disable(SPI6);
   LL_SPI_Init(SPI6, &SPI_InitStruct);
   LL_SPI_SetStandard(SPI6, LL_SPI_PROTOCOL_MOTOROLA);
   LL_SPI_SetFIFOThreshold(SPI6, LL_SPI_FIFO_TH_01DATA);
