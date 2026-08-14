@@ -79,7 +79,7 @@ static uint8_t g_tx_spi6[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D3"
 
 volatile uint8_t  g_fifo_batch_ready  = 0U;
 volatile uint8_t  g_dma_cycle_active  = 0U;
-volatile uint32_t g_sensor_fault_mask = 0U;
+volatile uint64_t g_sensor_fault_mask = 0U;
 volatile uint32_t g_dma_error_mask    = 0U;
 volatile uint32_t g_tim6_skip_count   = 0U;
 volatile uint32_t g_clk_ok_mask       = 0U;
@@ -558,7 +558,7 @@ static void ICM_WriteIRegBurst(ICM_Sensor_t *sensor,
     ICM_DelayUs(10U);
 }
 
-uint32_t ICM_InitAllSensors(void)
+uint64_t ICM_InitAllSensors(void)
 {
 	ICM_Bus_t * const buses[ICM_SPI_BUS_COUNT] = {&g_bus_spi1, &g_bus_spi5, &g_bus_spi4, &g_bus_spi2, &g_bus_spi3, &g_bus_spi6};
     uint8_t  bus_idx, sensor_idx, reg_val;
@@ -1188,7 +1188,7 @@ static void ICM_TryCompleteBatch(void)
 static void ICM_MarkFault(ICM_Sensor_t *s)
 {
     s->fault = 1U;
-    g_sensor_fault_mask |= (1UL << s->sensor_id);
+    g_sensor_fault_mask |= (1ULL << s->sensor_id);  // ULL вместо UL !
 }
 
 /* ----------------------------------------------------------------------------

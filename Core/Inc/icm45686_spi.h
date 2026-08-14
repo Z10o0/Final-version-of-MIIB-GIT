@@ -134,7 +134,7 @@ extern uint8_t          g_fifo_data[ICM_SPI_BUS_COUNT][ICM_SENSORS_PER_BUS][ICM_
 extern uint8_t 			g_fifo_data_spi6[ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE];
 extern volatile uint8_t  g_fifo_batch_ready;
 extern volatile uint8_t  g_dma_cycle_active;
-extern volatile uint32_t g_sensor_fault_mask;
+extern volatile uint64_t g_sensor_fault_mask;
 extern volatile uint32_t g_dma_error_mask;
 extern volatile uint32_t g_tim6_skip_count;
 extern volatile uint32_t g_clk_ok_mask;
@@ -149,7 +149,7 @@ extern icm_profile_t     g_icm_profile;  /* [NEW] DWT-профилировани
 
 void     ICM_BusesInit       (void);
 void     ICM_DWT_Init        (void);   /* [NEW] */
-uint32_t ICM_InitAllSensors  (void);
+uint64_t ICM_InitAllSensors  (void);
 void     ICM_WatchdogTick    (void);   /* [NEW] вызывать из TIM7 IRQ на частоте >100 Гц */
 uint32_t ICM_ConsumeEvents   (void);   /* [NEW] атомарно забирает и очищает event bitmap */
 

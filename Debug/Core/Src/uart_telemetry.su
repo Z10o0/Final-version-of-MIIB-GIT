@@ -18,7 +18,7 @@
 ../Core/Src/uart_telemetry.c:59:24:UART_ToU20	16	static
 ../Core/Src/uart_telemetry.c:64:13:UART_PackIMU19	40	static
 ../Core/Src/uart_telemetry.c:95:13:UART_ClearIMU19	24	static
-../Core/Src/uart_telemetry.c:101:13:UART_BuildPacket	24	static
+../Core/Src/uart_telemetry.c:101:13:UART_BuildPacket	40	static
 ../Core/Src/uart_telemetry.c:136:13:UART_StartDMAFromBuffer	16	static
 ../Core/Src/uart_telemetry.c:159:6:UART_Telemetry_Init	16	static
 ../Core/Src/uart_telemetry.c:215:6:UART_BuildAndSendSyncFrame	16	static,ignoring_inline_asm

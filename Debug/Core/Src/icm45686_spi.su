@@ -118,7 +118,7 @@
 ../Core/Src/icm45686_spi.c:1113:13:ICM_OnSpiEot	24	static,ignoring_inline_asm
 ../Core/Src/icm45686_spi.c:1156:13:ICM_FinishBus	16	static
 ../Core/Src/icm45686_spi.c:1164:13:ICM_TryCompleteBatch	8	static
-../Core/Src/icm45686_spi.c:1188:13:ICM_MarkFault	16	static
+../Core/Src/icm45686_spi.c:1188:13:ICM_MarkFault	32	static
 ../Core/Src/icm45686_spi.c:1202:13:ICM_RecoverBus	24	static
 ../Core/Src/icm45686_spi.c:1267:16:ICM_BusTimedOut	16	static
 ../Core/Src/icm45686_spi.c:1279:13:ICM_ServiceReintegration	24	static

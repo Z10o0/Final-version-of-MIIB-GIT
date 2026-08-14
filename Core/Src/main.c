@@ -139,7 +139,7 @@ int main(void)
 
   ICM_BusesInit();
 
-  uint32_t imu_faults = ICM_InitAllSensors();
+  uint64_t imu_faults = ICM_InitAllSensors();
   (void)imu_faults;  /* debug: breakpoint здесь для проверки fault-маски */
 
 
