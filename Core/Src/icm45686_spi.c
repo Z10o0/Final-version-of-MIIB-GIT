@@ -235,6 +235,9 @@ ICM_Bus_t g_bus_spi6 =
 static void ICM_BusesInit_PrecomputeDescriptors(ICM_Bus_t *bus, uint8_t bus_idx)
 {
     uint8_t i;
+    /* SPI6 (bus_idx = 5) использует g_fifo_data_spi6 — прекомпутируется отдельно */
+    if (bus_idx >= (ICM_SPI_BUS_COUNT - 1U)) { return; }  /* guard */
+
     for (i = 0U; i < ICM_SENSORS_PER_BUS; i++)
     {
         bus->dma_desc[i].rx_mem_addr = (uint32_t)g_fifo_data[bus_idx][i];

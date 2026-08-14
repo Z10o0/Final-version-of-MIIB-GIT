@@ -1,235 +1,202 @@
 /*
 ******************************************************************************
-**
-**  File        : LinkerScript.ld
-**
-**  Author      : STM32CubeIDE
-**
-**  Abstract    : Linker script for STM32H7 series
-**                1024Kbytes FLASH and 560Kbytes RAM
-**
-**  Target      : STMicroelectronics STM32
-**
-**  Distribution: The file is distributed as is, without any warranty
-**                of any kind.
-**
-*****************************************************************************
-** @attention
-**
-** Copyright (c) 2025 STMicroelectronics.
-** All rights reserved.
-**
-** This software is licensed under terms that can be found in the LICENSE file
-** in the root directory of this software component.
-** If no LICENSE file comes with this software, it is provided AS-IS.
-**
-****************************************************************************
+** File    : STM32H723ZGTX_FLASH.ld
+** Target  : STM32H723ZGTx  (1024K FLASH, 560K RAM total)
+******************************************************************************
 */
 
-/* Точка входа — символ Reset_Handler из startup_stm32h723zgtx.s */
 ENTRY(Reset_Handler)
 
-/* Вершина стека = конец AXI SRAM D1.
- * ВАЖНО: стек растёт вниз, поэтому _estack = последний байт RAM_D1.
- * DMA-буферы размещены в конце RAM_D1 через .RAM_D1_noinit (NOLOAD),
- * поэтому стек не пересекается с ними — линкер выдаст ошибку если не хватит места. */
+/* Стек — конец AXI SRAM D1 (растёт вниз) */
 _estack = ORIGIN(RAM_D1) + LENGTH(RAM_D1);
 
-/* Минимальные размеры кучи и стека.
- * Линкер выдаст ошибку если ._user_heap_stack не поместится в RAM_D1. */
-_Min_Heap_Size  = 0x200;   /* 512 байт  — куча  */
-_Min_Stack_Size = 0x800;   /* 2048 байт — стек (увеличен: ISR-стек для 3 DMA ISR одновременно) */
+_Min_Heap_Size  = 0x200;   /* 512  байт — куча  */
+_Min_Stack_Size = 0x800;   /* 2048 байт — стек  */
 
 /* ============================================================
  * КАРТА ПАМЯТИ STM32H723ZGT6
  * ============================================================
- *
- *  ITCMRAM  0x00000000  64K   — только ядро (код критичных ISR)
- *  DTCMRAM  0x20000000  128K  — только ядро (стек по умолчанию у HAL)
- *                               !! DMA1/DMA2 НЕ видят DTCM !!
- *  FLASH    0x08000000  1024K — программный код (RO)
- *  RAM_D1   0x24000000  320K  — AXI SRAM: .data, .bss, стек, DMA-буферы
- *                               DMA1 и DMA2 имеют полный доступ
- *  RAM_D2   0x30000000  32K   — SRAM D2 (AHB): резерв / BDMA
- *  RAM_D3   0x38000000  16K   — SRAM D3 (APB4): резерв / BDMA
- *
- * В данном проекте:
- *   .data, .bss, стек, куча → RAM_D1 (основная рабочая SRAM)
- *   .RAM_D1_noinit           → RAM_D1 (DMA-буферы без инициализации)
- *   Код                      → FLASH
+ * ITCMRAM  0x00000000  64K  — только ядро (код критичных ISR)
+ * DTCMRAM  0x20000000 128K  — только ядро; DMA1/DMA2 НЕ видят
+ * FLASH    0x08000000 1024K — программный код (RO)
+ * RAM_D1   0x24000000  320K — AXI SRAM: .data/.bss/стек/DMA-буферы
+ *                             DMA1 и DMA2 имеют полный доступ
+ * RAM_D2   0x30000000   32K — AHB SRAM D2: DMA-буферы SPI1..SPI5
+ *                             (секция .RAM_D2 в icm45686_spi.c)
+ * RAM_D3   0x38000000   16K — APB4 SRAM4: BDMA-буферы SPI6 ONLY
+ *                             (секция .RAM_D3 в icm45686_spi.c)
+ *                             BDMA видит ТОЛЬКО этот домен!
  * ============================================================ */
 MEMORY
 {
-  ITCMRAM (xrw)  : ORIGIN = 0x00000000, LENGTH = 64K
-  DTCMRAM (xrw)  : ORIGIN = 0x20000000, LENGTH = 128K
-  FLASH    (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
-  RAM_D1   (xrw) : ORIGIN = 0x24000000, LENGTH = 320K
-  RAM_D2   (xrw) : ORIGIN = 0x30000000, LENGTH = 32K
-  RAM_D3   (xrw) : ORIGIN = 0x38000000, LENGTH = 16K
+    ITCMRAM (xrw) : ORIGIN = 0x00000000, LENGTH = 64K
+    DTCMRAM (xrw) : ORIGIN = 0x20000000, LENGTH = 128K
+    FLASH    (rx)  : ORIGIN = 0x08000000, LENGTH = 1024K
+    RAM_D1  (xrw) : ORIGIN = 0x24000000, LENGTH = 320K
+    RAM_D2  (xrw) : ORIGIN = 0x30000000, LENGTH = 32K
+    RAM_D3  (xrw) : ORIGIN = 0x38000000, LENGTH = 16K
 }
 
-/* ============================================================
- * СЕКЦИИ ВЫВОДА
- * ============================================================ */
 SECTIONS
 {
-  /* ── Таблица векторов прерываний — первая в FLASH ── */
-  .isr_vector :
-  {
+    /* ── Таблица векторов прерываний ── */
+    .isr_vector :
+    {
+        . = ALIGN(4);
+        KEEP(*(.isr_vector))
+        . = ALIGN(4);
+    } >FLASH
+
+    /* ── Программный код ── */
+    .text :
+    {
+        . = ALIGN(4);
+        *(.text)
+        *(.text*)
+        *(.glue_7)
+        *(.glue_7t)
+        *(.eh_frame)
+        KEEP (*(.init))
+        KEEP (*(.fini))
+        . = ALIGN(4);
+        _etext = .;
+    } >FLASH
+
+    /* ── Константы и строки (read-only) ── */
+    .rodata :
+    {
+        . = ALIGN(4);
+        *(.rodata)
+        *(.rodata*)
+        . = ALIGN(4);
+    } >FLASH
+
+    /* ── C++ exception tables ── */
+    .ARM.extab (READONLY) :
+    {
+        *(.ARM.extab* .gnu.linkonce.armextab.*)
+    } >FLASH
+
+    .ARM (READONLY) :
+    {
+        __exidx_start = .;
+        *(.ARM.exidx*)
+        __exidx_end = .;
+    } >FLASH
+
+    /* ── Таблицы конструкторов/деструкторов C++ ── */
+    .preinit_array (READONLY) :
+    {
+        PROVIDE_HIDDEN (__preinit_array_start = .);
+        KEEP (*(.preinit_array*))
+        PROVIDE_HIDDEN (__preinit_array_end = .);
+    } >FLASH
+
+    .init_array (READONLY) :
+    {
+        PROVIDE_HIDDEN (__init_array_start = .);
+        KEEP (*(SORT(.init_array.*)))
+        KEEP (*(.init_array*))
+        PROVIDE_HIDDEN (__init_array_end = .);
+    } >FLASH
+
+    .fini_array (READONLY) :
+    {
+        PROVIDE_HIDDEN (__fini_array_start = .);
+        KEEP (*(SORT(.fini_array.*)))
+        KEEP (*(.fini_array*))
+        PROVIDE_HIDDEN (__fini_array_end = .);
+    } >FLASH
+
+    /* ── Инициализированные данные: LMA во FLASH, VMA в RAM_D1 ── */
+    _sidata = LOADADDR(.data);
+
+    .data :
+    {
+        . = ALIGN(4);
+        _sdata = .;
+        *(.data)
+        *(.data*)
+        *(.RamFunc)    /* функции, явно выполняемые из RAM */
+        *(.RamFunc*)
+        . = ALIGN(4);
+        _edata = .;
+    } >RAM_D1 AT> FLASH
+
+    /* ── Неинициализированные данные: обнуляются стартапом ──
+     * ВАЖНО: DMA-буферы сюда НЕ попадают — они в .RAM_D2 / .RAM_D3 */
     . = ALIGN(4);
-    KEEP(*(.isr_vector))
-    . = ALIGN(4);
-  } >FLASH
+    .bss :
+    {
+        _sbss = .;
+        __bss_start__ = _sbss;
+        *(.bss)
+        *(.bss*)
+        *(COMMON)
+        . = ALIGN(4);
+        _ebss = .;
+        __bss_end__ = _ebss;
+    } >RAM_D1
 
-  /* ── Программный код ── */
-  .text :
-  {
-    . = ALIGN(4);
-    *(.text)
-    *(.text*)
-    *(.glue_7)
-    *(.glue_7t)
-    *(.eh_frame)
-    KEEP (*(.init))
-    KEEP (*(.fini))
-    . = ALIGN(4);
-    _etext = .;
-  } >FLASH
+    /* ── Куча и стек ── */
+    ._user_heap_stack :
+    {
+        . = ALIGN(8);
+        PROVIDE ( end  = . );
+        PROVIDE ( _end = . );
+        . = . + _Min_Heap_Size;
+        . = . + _Min_Stack_Size;
+        . = ALIGN(8);
+    } >RAM_D1
 
-  /* ── Константы и строки (read-only data) ── */
-  .rodata :
-  {
-    . = ALIGN(4);
-    *(.rodata)
-    *(.rodata*)
-    . = ALIGN(4);
-  } >FLASH
+    /* ══════════════════════════════════════════════════════════
+     * .RAM_D2 — DMA RX/TX буферы для SPI1, SPI2, SPI3, SPI4, SPI5
+     *
+     * NOLOAD: не загружается из FLASH, стартап не трогает.
+     * ICM_BusesInit() инициализирует их явно через memset().
+     *
+     * Переменные с __attribute__((section(".RAM_D2"), aligned(32))):
+     *   g_fifo_data      — RX-буферы (5 шин × 6 датчиков × N байт)
+     *   g_tx_spi1..spi5  — TX-шаблоны команд FIFO_DATA|READ
+     *
+     * aligned(32) обязательно для корректной работы D-кэша
+     * при вызове SCB_InvalidateDCache_by_Addr().
+     * ══════════════════════════════════════════════════════════ */
+    .RAM_D2 (NOLOAD) :
+    {
+        . = ALIGN(32);
+        *(.RAM_D2)
+        *(.RAM_D2*)
+        . = ALIGN(32);
+    } >RAM_D2
 
-  /* ── C++ exception tables ── */
-  .ARM.extab (READONLY) :
-  {
-    *(.ARM.extab* .gnu.linkonce.armextab.*)
-  } >FLASH
+    /* ══════════════════════════════════════════════════════════
+     * .RAM_D3 — BDMA буферы ТОЛЬКО для SPI6
+     *
+     * КРИТИЧНО: BDMA (Basic DMA) обслуживает только домен D3
+     * и физически не имеет доступа к RAM_D1 или RAM_D2.
+     * Буферы SPI6 ОБЯЗАНЫ лежать здесь, иначе BDMA
+     * будет читать/писать неверные адреса без ошибки шины.
+     *
+     * Переменные с __attribute__((section(".RAM_D3"), aligned(32))):
+     *   g_fifo_data_spi6 — RX-буфер (6 датчиков × N байт)
+     *   g_tx_spi6        — TX-шаблон команды FIFO_DATA|READ
+     * ══════════════════════════════════════════════════════════ */
+    .RAM_D3 (NOLOAD) :
+    {
+        . = ALIGN(32);
+        *(.RAM_D3)
+        *(.RAM_D3*)
+        . = ALIGN(32);
+    } >RAM_D3
 
-  .ARM (READONLY) :
-  {
-    __exidx_start = .;
-    *(.ARM.exidx*)
-    __exidx_end = .;
-  } >FLASH
+    /* ── Удалить отладочную информацию стандартных библиотек ── */
+    /DISCARD/ :
+    {
+        libc.a   ( * )
+        libm.a   ( * )
+        libgcc.a ( * )
+    }
 
-  /* ── Таблицы конструкторов/деструкторов C++ ── */
-  .preinit_array (READONLY) :
-  {
-    PROVIDE_HIDDEN (__preinit_array_start = .);
-    KEEP (*(.preinit_array*))
-    PROVIDE_HIDDEN (__preinit_array_end = .);
-  } >FLASH
-
-  .init_array (READONLY) :
-  {
-    PROVIDE_HIDDEN (__init_array_start = .);
-    KEEP (*(SORT(.init_array.*)))
-    KEEP (*(.init_array*))
-    PROVIDE_HIDDEN (__init_array_end = .);
-  } >FLASH
-
-  .fini_array (READONLY) :
-  {
-    PROVIDE_HIDDEN (__fini_array_start = .);
-    KEEP (*(SORT(.fini_array.*)))
-    KEEP (*(.fini_array*))
-    PROVIDE_HIDDEN (__fini_array_end = .);
-  } >FLASH
-
-  /* ── Инициализированные данные: хранятся в FLASH, копируются в RAM_D1 при старте ──
-   * startup_stm32h723zgtx.s копирует [_sidata .. _sidata+(_edata-_sdata)] → [_sdata.._edata]
-   * AT> FLASH означает: LMA (load address) в FLASH, VMA (runtime address) в RAM_D1 */
-  _sidata = LOADADDR(.data);
-
-  .data :
-  {
-    . = ALIGN(4);
-    _sdata = .;
-    *(.data)
-    *(.data*)
-    *(.RamFunc)    /* Функции, явно размещённые в RAM для быстрого выполнения */
-    *(.RamFunc*)
-    . = ALIGN(4);
-    _edata = .;
-  } >RAM_D1 AT> FLASH
-
-  /* ── Неинициализированные данные: обнуляются startup при старте ──
-   * startup_stm32h723zgtx.s обнуляет [_sbss.._ebss].
-   * Сюда попадают global/static переменные без явного начального значения.
-   *
-   * ВАЖНО: сюда НЕ должны попасть DMA-буферы (g_fifo_data, g_bus_spi*)!
-   * Они размещаются в .RAM_D1_noinit ниже — startup их НЕ трогает. */
-  . = ALIGN(4);
-  .bss :
-  {
-    _sbss = .;
-    __bss_start__ = _sbss;
-    *(.bss)
-    *(.bss*)
-    *(COMMON)
-    . = ALIGN(4);
-    _ebss = .;
-    __bss_end__ = _ebss;
-  } >RAM_D1
-
-  /* ── Куча и стек: проверка что хватает места ── */
-  ._user_heap_stack :
-  {
-    . = ALIGN(8);
-    PROVIDE ( end  = . );
-    PROVIDE ( _end = . );
-    . = . + _Min_Heap_Size;
-    . = . + _Min_Stack_Size;
-    . = ALIGN(8);
-  } >RAM_D1
-
-  /* ══════════════════════════════════════════════════════════════
-   * .RAM_D1_noinit — DMA-буферы в AXI SRAM D1
-   * ══════════════════════════════════════════════════════════════
-   *
-   * NOLOAD: секция НЕ загружается из FLASH и НЕ обнуляется startup.
-   * Переменные в этой секции содержат мусор после сброса — это нормально:
-   *   ICM_BusesInit() явно обнуляет g_fifo_data через memset().
-   *
-   * Сюда помещаются:
-   *   g_fifo_data   — DMA RX-буферы FIFO (3 шины × 6 датчиков × N байт)
-   *   g_bus_spi1    — дескриптор шины SPI1 (содержит tx_buf для DMA TX)
-   *   g_bus_spi5    — дескриптор шины SPI5
-   *   g_bus_spi4    — дескриптор шины SPI4
-   *
-   * aligned(32) — кратно размеру cache line Cortex-M7.
-   * Это обязательно если в будущем включите D-кэш (SCB_EnableDCache):
-   * без выравнивания SCB_InvalidateDCache_by_Addr() будет работать некорректно.
-   *
-   * Расположение в памяти:
-   *   0x24000000  ← начало RAM_D1
-   *   [.data]     ← инициализированные переменные
-   *   [.bss]      ← обнуляемые переменные
-   *   [heap+stack]
-   *   [.RAM_D1_noinit] ← DMA-буферы (в конце RAM_D1)
-   *   0x24050000  ← конец RAM_D1 (320K = 0x50000 байт)
-   * ══════════════════════════════════════════════════════════════ */
-.RAM_D1 (NOLOAD) :
-{
-  . = ALIGN(32);
-  *(.RAM_D1)
-  *(.RAM_D1*)
-  . = ALIGN(32);
-} >RAM_D1
-
-  /* ── Удалить отладочную информацию стандартных библиотек ── */
-  /DISCARD/ :
-  {
-    libc.a   ( * )
-    libm.a   ( * )
-    libgcc.a ( * )
-  }
-
-  .ARM.attributes 0 : { *(.ARM.attributes) }
+    .ARM.attributes 0 : { *(.ARM.attributes) }
 }

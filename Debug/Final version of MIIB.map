@@ -3384,117 +3384,120 @@ LOAD C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.exte
 
 .igot.plt       0x240005a4        0x0 load address 0x0800876c
  .igot.plt      0x240005a4        0x0 C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/../lib/gcc/arm-none-eabi/14.3.1/thumb/v7e-m+dp/hard/crtbegin.o
+                0x240005a4                        . = ALIGN (0x4)
 
-.RAM_D2         0x240005c0     0x5f84 load address 0x0800876c
- .RAM_D2        0x240005c0     0x3401 ./Core/Src/icm45686_spi.o
-                0x240005c0                g_fifo_data
- *fill*         0x240039c1        0x3 
- .RAM_D2        0x240039c4     0x2b80 ./Core/Src/uart_telemetry.o
-
-.RAM_D3         0x24006560      0x8e1 load address 0x0800e6f0
- .RAM_D3        0x24006560      0x8e1 ./Core/Src/icm45686_spi.o
-                0x24006560                g_fifo_data_spi6
-                0x24006e44                        . = ALIGN (0x4)
-
-.bss            0x24006e44     0x4014 load address 0x0800efd1
-                0x24006e44                        _sbss = .
-                0x24006e44                        __bss_start__ = _sbss
+.bss            0x240005a4     0x4014 load address 0x0800876c
+                0x240005a4                        _sbss = .
+                0x240005a4                        __bss_start__ = _sbss
  *(.bss)
- .bss           0x24006e44       0x1c C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/../lib/gcc/arm-none-eabi/14.3.1/thumb/v7e-m+dp/hard/crtbegin.o
+ .bss           0x240005a4       0x1c C:/ST/STM32CubeIDE_2.2.0/STM32CubeIDE/plugins/com.st.stm32cube.ide.mcu.externaltools.gnu-tools-for-stm32.14.3.rel1.win32_1.0.100.202602081740/tools/bin/../lib/gcc/arm-none-eabi/14.3.1/thumb/v7e-m+dp/hard/crtbegin.o
  *(.bss*)
  .bss.g_sensor_batches
-                0x24006e60     0x3f90 ./Core/Src/icm45686_data.o
-                0x24006e60                g_sensor_batches
+                0x240005c0     0x3f90 ./Core/Src/icm45686_data.o
+                0x240005c0                g_sensor_batches
  .bss.g_icm_events
-                0x2400adf0        0x4 ./Core/Src/icm45686_spi.o
-                0x2400adf0                g_icm_events
+                0x24004550        0x4 ./Core/Src/icm45686_spi.o
+                0x24004550                g_icm_events
  .bss.g_icm_profile
-                0x2400adf4       0x20 ./Core/Src/icm45686_spi.o
-                0x2400adf4                g_icm_profile
+                0x24004554       0x20 ./Core/Src/icm45686_spi.o
+                0x24004554                g_icm_profile
  .bss.g_fifo_batch_ready
-                0x2400ae14        0x1 ./Core/Src/icm45686_spi.o
-                0x2400ae14                g_fifo_batch_ready
+                0x24004574        0x1 ./Core/Src/icm45686_spi.o
+                0x24004574                g_fifo_batch_ready
  .bss.g_dma_cycle_active
-                0x2400ae15        0x1 ./Core/Src/icm45686_spi.o
-                0x2400ae15                g_dma_cycle_active
- *fill*         0x2400ae16        0x2 
+                0x24004575        0x1 ./Core/Src/icm45686_spi.o
+                0x24004575                g_dma_cycle_active
+ *fill*         0x24004576        0x2 
  .bss.g_sensor_fault_mask
-                0x2400ae18        0x4 ./Core/Src/icm45686_spi.o
-                0x2400ae18                g_sensor_fault_mask
+                0x24004578        0x4 ./Core/Src/icm45686_spi.o
+                0x24004578                g_sensor_fault_mask
  .bss.g_dma_error_mask
-                0x2400ae1c        0x4 ./Core/Src/icm45686_spi.o
-                0x2400ae1c                g_dma_error_mask
+                0x2400457c        0x4 ./Core/Src/icm45686_spi.o
+                0x2400457c                g_dma_error_mask
  .bss.g_tim6_skip_count
-                0x2400ae20        0x4 ./Core/Src/icm45686_spi.o
-                0x2400ae20                g_tim6_skip_count
+                0x24004580        0x4 ./Core/Src/icm45686_spi.o
+                0x24004580                g_tim6_skip_count
  .bss.g_clk_ok_mask
-                0x2400ae24        0x4 ./Core/Src/icm45686_spi.o
-                0x2400ae24                g_clk_ok_mask
+                0x24004584        0x4 ./Core/Src/icm45686_spi.o
+                0x24004584                g_clk_ok_mask
  .bss.g_clk_fail_mask
-                0x2400ae28        0x4 ./Core/Src/icm45686_spi.o
-                0x2400ae28                g_clk_fail_mask
- .bss.s_q_head  0x2400ae2c        0x1 ./Core/Src/uart_telemetry.o
- .bss.s_q_tail  0x2400ae2d        0x1 ./Core/Src/uart_telemetry.o
+                0x24004588        0x4 ./Core/Src/icm45686_spi.o
+                0x24004588                g_clk_fail_mask
+ .bss.s_q_head  0x2400458c        0x1 ./Core/Src/uart_telemetry.o
+ .bss.s_q_tail  0x2400458d        0x1 ./Core/Src/uart_telemetry.o
  .bss.s_q_count
-                0x2400ae2e        0x1 ./Core/Src/uart_telemetry.o
+                0x2400458e        0x1 ./Core/Src/uart_telemetry.o
  .bss.s_dma_active
-                0x2400ae2f        0x1 ./Core/Src/uart_telemetry.o
+                0x2400458f        0x1 ./Core/Src/uart_telemetry.o
  .bss.s_frame_counter
-                0x2400ae30        0x2 ./Core/Src/uart_telemetry.o
- *fill*         0x2400ae32        0x2 
+                0x24004590        0x2 ./Core/Src/uart_telemetry.o
+ *fill*         0x24004592        0x2 
  .bss.g_uart_drop_count
-                0x2400ae34        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae34                g_uart_drop_count
+                0x24004594        0x4 ./Core/Src/uart_telemetry.o
+                0x24004594                g_uart_drop_count
  .bss.g_uart_build_count
-                0x2400ae38        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae38                g_uart_build_count
+                0x24004598        0x4 ./Core/Src/uart_telemetry.o
+                0x24004598                g_uart_build_count
  .bss.g_uart_enqueue_count
-                0x2400ae3c        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae3c                g_uart_enqueue_count
+                0x2400459c        0x4 ./Core/Src/uart_telemetry.o
+                0x2400459c                g_uart_enqueue_count
  .bss.g_uart_dma_start_count
-                0x2400ae40        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae40                g_uart_dma_start_count
+                0x240045a0        0x4 ./Core/Src/uart_telemetry.o
+                0x240045a0                g_uart_dma_start_count
  .bss.g_uart_dma_tc_count
-                0x2400ae44        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae44                g_uart_dma_tc_count
+                0x240045a4        0x4 ./Core/Src/uart_telemetry.o
+                0x240045a4                g_uart_dma_tc_count
  .bss.g_uart_queue_high_watermark
-                0x2400ae48        0x1 ./Core/Src/uart_telemetry.o
-                0x2400ae48                g_uart_queue_high_watermark
+                0x240045a8        0x1 ./Core/Src/uart_telemetry.o
+                0x240045a8                g_uart_queue_high_watermark
  .bss.g_uart_queue_count
-                0x2400ae49        0x1 ./Core/Src/uart_telemetry.o
-                0x2400ae49                g_uart_queue_count
- *fill*         0x2400ae4a        0x2 
+                0x240045a9        0x1 ./Core/Src/uart_telemetry.o
+                0x240045a9                g_uart_queue_count
+ *fill*         0x240045aa        0x2 
  .bss.g_uart_dma_te_count
-                0x2400ae4c        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae4c                g_uart_dma_te_count
+                0x240045ac        0x4 ./Core/Src/uart_telemetry.o
+                0x240045ac                g_uart_dma_te_count
  .bss.g_uart_dma_dme_count
-                0x2400ae50        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae50                g_uart_dma_dme_count
+                0x240045b0        0x4 ./Core/Src/uart_telemetry.o
+                0x240045b0                g_uart_dma_dme_count
  .bss.g_uart_dma_fe_count
-                0x2400ae54        0x4 ./Core/Src/uart_telemetry.o
-                0x2400ae54                g_uart_dma_fe_count
+                0x240045b4        0x4 ./Core/Src/uart_telemetry.o
+                0x240045b4                g_uart_dma_fe_count
  *(COMMON)
-                0x2400ae58                        . = ALIGN (0x4)
-                0x2400ae58                        _ebss = .
-                0x2400ae58                        __bss_end__ = _ebss
+                0x240045b8                        . = ALIGN (0x4)
+                0x240045b8                        _ebss = .
+                0x240045b8                        __bss_end__ = _ebss
 
 ._user_heap_stack
-                0x2400ae58      0xa00 load address 0x0800efd1
-                0x2400ae58                        . = ALIGN (0x8)
+                0x240045b8      0xa00 load address 0x0800876c
+                0x240045b8                        . = ALIGN (0x8)
                 [!provide]                        PROVIDE (end = .)
-                0x2400ae58                        PROVIDE (_end = .)
-                0x2400b058                        . = (. + _Min_Heap_Size)
- *fill*         0x2400ae58      0x200 
-                0x2400b858                        . = (. + _Min_Stack_Size)
- *fill*         0x2400b058      0x800 
-                0x2400b858                        . = ALIGN (0x8)
+                0x240045b8                        PROVIDE (_end = .)
+                0x240047b8                        . = (. + _Min_Heap_Size)
+ *fill*         0x240045b8      0x200 
+                0x24004fb8                        . = (. + _Min_Stack_Size)
+ *fill*         0x240047b8      0x800 
+                0x24004fb8                        . = ALIGN (0x8)
 
-.RAM_D1         0x2400b858        0x8 load address 0x0800efd1
-                0x2400b860                        . = ALIGN (0x20)
- *fill*         0x2400b858        0x8 
- *(.RAM_D1)
- *(.RAM_D1*)
-                0x2400b860                        . = ALIGN (0x20)
+.RAM_D2         0x30000000     0x5fa0
+                0x30000000                        . = ALIGN (0x20)
+ *(.RAM_D2)
+ .RAM_D2        0x30000000     0x3401 ./Core/Src/icm45686_spi.o
+                0x30000000                g_fifo_data
+ *fill*         0x30003401        0x3 
+ .RAM_D2        0x30003404     0x2b80 ./Core/Src/uart_telemetry.o
+ *(.RAM_D2*)
+                0x30005fa0                        . = ALIGN (0x20)
+ *fill*         0x30005f84       0x1c 
+
+.RAM_D3         0x38000000      0x900
+                0x38000000                        . = ALIGN (0x20)
+ *(.RAM_D3)
+ .RAM_D3        0x38000000      0x8e1 ./Core/Src/icm45686_spi.o
+                0x38000000                g_fifo_data_spi6
+ *(.RAM_D3*)
+                0x38000900                        . = ALIGN (0x20)
+ *fill*         0x380008e1       0x1f 
 
 /DISCARD/
  libc.a(*)

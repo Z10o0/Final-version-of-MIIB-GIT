@@ -77,7 +77,7 @@ extern "C" {
 #define UART_PKT_HEADER_0     0xAAU
 #define UART_PKT_HEADER_1     0x55U
 
-#define UART_SENSOR_COUNT     18U
+#define UART_SENSOR_COUNT     36U
 #define UART_IMU_WIRE_BYTES   19U
 #define UART_COUNTER_BYTES    2U
 #define UART_HEADER_BYTES     2U
