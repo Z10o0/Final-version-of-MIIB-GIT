@@ -1215,8 +1215,19 @@ static void ICM_RecoverBus(ICM_Bus_t *bus)
     ICM_SPI_EnsureDisabled(bus->spi);
     LL_SPI_DisableDMAReq_RX(bus->spi);
     LL_SPI_DisableDMAReq_TX(bus->spi);
-    LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
-    LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
+
+    /* Отключение потоков/каналов: ветвление BDMA (SPI6/D3) vs DMA1/DMA2 */
+    if (bus->is_bdma)
+    {
+        LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_rx);
+        LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_tx);
+    }
+    else
+    {
+        LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
+        LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
+    }
+
     ICM_ClearDmaFlags(bus);
     LL_SPI_DisableIT_EOT(bus->spi);
     LL_SPI_ClearFlag_EOT(bus->spi);
@@ -1224,9 +1235,9 @@ static void ICM_RecoverBus(ICM_Bus_t *bus)
     if      (bus == &g_bus_spi1) { ICM_SetEvent(ICM_EVT_BUS0_FAULT); }
     else if (bus == &g_bus_spi5) { ICM_SetEvent(ICM_EVT_BUS1_FAULT); }
     else if (bus == &g_bus_spi4) { ICM_SetEvent(ICM_EVT_BUS2_FAULT); }
-    else if (bus == &g_bus_spi2) { ICM_SetEvent(ICM_EVT_BUS3_FAULT); }   /* [NEW] */
-    else if (bus == &g_bus_spi3) { ICM_SetEvent(ICM_EVT_BUS4_FAULT); }   /* [NEW] */
-    else                          { ICM_SetEvent(ICM_EVT_BUS5_FAULT); }  /* [NEW] SPI6 */
+    else if (bus == &g_bus_spi2) { ICM_SetEvent(ICM_EVT_BUS3_FAULT); }
+    else if (bus == &g_bus_spi3) { ICM_SetEvent(ICM_EVT_BUS4_FAULT); }
+    else                          { ICM_SetEvent(ICM_EVT_BUS5_FAULT); } /* SPI6 */
 
     next_idx = ICM_FindNextHealthy(bus, (uint8_t)(idx + 1U));
     if (next_idx < ICM_SENSORS_PER_BUS)
@@ -1342,8 +1353,8 @@ static uint8_t ICM_BusIndex(const ICM_Bus_t *bus)
     if (bus == &g_bus_spi1) { return 0U; }
     if (bus == &g_bus_spi5) { return 1U; }
     if (bus == &g_bus_spi4) { return 2U; }
-    if (bus == &g_bus_spi3) { return 3U; }
-    if (bus == &g_bus_spi2) { return 4U; }
+    if (bus == &g_bus_spi2) { return 3U; }
+    if (bus == &g_bus_spi3) { return 4U; }
     return 5U;
 }
 
@@ -1359,7 +1370,7 @@ static uint8_t ICM_FindNextHealthy(const ICM_Bus_t *bus, uint8_t from)
 
 static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
 {
-    if (bus->is_bdma)   /* [NEW] SPI6 */
+    if (bus->is_bdma)   /* SPI6 — BDMA Ch0 (RX) / Ch1 (TX) */
     {
         LL_BDMA_ClearFlag_TC0(BDMA); LL_BDMA_ClearFlag_HT0(BDMA);
         LL_BDMA_ClearFlag_TE0(BDMA);
@@ -1368,7 +1379,7 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
         return;
     }
 
-    if (bus == &g_bus_spi1)
+    if (bus == &g_bus_spi1)         /* DMA1 Stream2 (RX) / Stream3 (TX) */
     {
         LL_DMA_ClearFlag_TC2(DMA1); LL_DMA_ClearFlag_HT2(DMA1);
         LL_DMA_ClearFlag_TE2(DMA1); LL_DMA_ClearFlag_DME2(DMA1);
@@ -1377,7 +1388,7 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
         LL_DMA_ClearFlag_TE3(DMA1); LL_DMA_ClearFlag_DME3(DMA1);
         LL_DMA_ClearFlag_FE3(DMA1);
     }
-    else if (bus == &g_bus_spi5)
+    else if (bus == &g_bus_spi5)    /* DMA2 Stream2 (RX) / Stream3 (TX) */
     {
         LL_DMA_ClearFlag_TC2(DMA2); LL_DMA_ClearFlag_HT2(DMA2);
         LL_DMA_ClearFlag_TE2(DMA2); LL_DMA_ClearFlag_DME2(DMA2);
@@ -1386,7 +1397,7 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
         LL_DMA_ClearFlag_TE3(DMA2); LL_DMA_ClearFlag_DME3(DMA2);
         LL_DMA_ClearFlag_FE3(DMA2);
     }
-    else if (bus == &g_bus_spi4)
+    else if (bus == &g_bus_spi4)    /* DMA2 Stream0 (RX) / Stream1 (TX) */
     {
         LL_DMA_ClearFlag_TC0(DMA2); LL_DMA_ClearFlag_HT0(DMA2);
         LL_DMA_ClearFlag_TE0(DMA2); LL_DMA_ClearFlag_DME0(DMA2);
@@ -1395,25 +1406,25 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
         LL_DMA_ClearFlag_TE1(DMA2); LL_DMA_ClearFlag_DME1(DMA2);
         LL_DMA_ClearFlag_FE1(DMA2);
     }
-    else if (bus->spi == SPI2)   /* [NEW] */
-        {
-            LL_DMA_ClearFlag_TC4(DMA1); LL_DMA_ClearFlag_HT4(DMA1);
-            LL_DMA_ClearFlag_TE4(DMA1); LL_DMA_ClearFlag_DME4(DMA1);
-            LL_DMA_ClearFlag_FE4(DMA1);
-            LL_DMA_ClearFlag_TC5(DMA1); LL_DMA_ClearFlag_HT5(DMA1);
-            LL_DMA_ClearFlag_TE5(DMA1); LL_DMA_ClearFlag_DME5(DMA1);
-            LL_DMA_ClearFlag_FE5(DMA1);
-        }
-        else if (bus->spi == SPI3)   /* [NEW] */
-        {
-            LL_DMA_ClearFlag_TC6(DMA1); LL_DMA_ClearFlag_HT6(DMA1);
-            LL_DMA_ClearFlag_TE6(DMA1); LL_DMA_ClearFlag_DME6(DMA1);
-            LL_DMA_ClearFlag_FE6(DMA1);
-            LL_DMA_ClearFlag_TC7(DMA1); LL_DMA_ClearFlag_HT7(DMA1);
-            LL_DMA_ClearFlag_TE7(DMA1); LL_DMA_ClearFlag_DME7(DMA1);
-            LL_DMA_ClearFlag_FE7(DMA1);
-        }
+    else if (bus == &g_bus_spi2)    /* DMA1 Stream4 (RX) / Stream5 (TX) */
+    {
+        LL_DMA_ClearFlag_TC4(DMA1); LL_DMA_ClearFlag_HT4(DMA1);
+        LL_DMA_ClearFlag_TE4(DMA1); LL_DMA_ClearFlag_DME4(DMA1);
+        LL_DMA_ClearFlag_FE4(DMA1);
+        LL_DMA_ClearFlag_TC5(DMA1); LL_DMA_ClearFlag_HT5(DMA1);
+        LL_DMA_ClearFlag_TE5(DMA1); LL_DMA_ClearFlag_DME5(DMA1);
+        LL_DMA_ClearFlag_FE5(DMA1);
     }
+    else if (bus == &g_bus_spi3)    /* DMA1 Stream6 (RX) / Stream7 (TX) */
+    {
+        LL_DMA_ClearFlag_TC6(DMA1); LL_DMA_ClearFlag_HT6(DMA1);
+        LL_DMA_ClearFlag_TE6(DMA1); LL_DMA_ClearFlag_DME6(DMA1);
+        LL_DMA_ClearFlag_FE6(DMA1);
+        LL_DMA_ClearFlag_TC7(DMA1); LL_DMA_ClearFlag_HT7(DMA1);
+        LL_DMA_ClearFlag_TE7(DMA1); LL_DMA_ClearFlag_DME7(DMA1);
+        LL_DMA_ClearFlag_FE7(DMA1);
+    }
+}
 
 /* ----------------------------------------------------------------------------
  * [REWRITE v2] ICM_SPI_EnsureDisabled — ограниченный timeout вместо
