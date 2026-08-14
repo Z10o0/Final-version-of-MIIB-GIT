@@ -557,7 +557,7 @@ static void ICM_WriteIRegBurst(ICM_Sensor_t *sensor,
 
 uint32_t ICM_InitAllSensors(void)
 {
-    ICM_Bus_t * const buses[ICM_SPI_BUS_COUNT] = { &g_bus_spi1, &g_bus_spi5, &g_bus_spi4 };
+	ICM_Bus_t * const buses[ICM_SPI_BUS_COUNT] = {&g_bus_spi1, &g_bus_spi5, &g_bus_spi4, &g_bus_spi2, &g_bus_spi3, &g_bus_spi6};
     uint8_t  bus_idx, sensor_idx, reg_val;
     uint32_t timeout;
 
@@ -1089,8 +1089,18 @@ static void ICM_OnDmaRxComplete(ICM_Bus_t *bus)
 
     LL_SPI_DisableDMAReq_RX(bus->spi);
     LL_SPI_DisableDMAReq_TX(bus->spi);
-    LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
-    LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
+
+    /* Отключение каналов: ветвление BDMA (SPI6 / домен D3) vs стандартный DMA1/DMA2 */
+    if (bus->is_bdma)
+    {
+        LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_rx);
+        LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_tx);
+    }
+    else
+    {
+        LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
+        LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
+    }
 
     bus->state = BUS_WAIT_EOT;
     LL_SPI_EnableIT_EOT(bus->spi);
@@ -1275,7 +1285,7 @@ static void ICM_ServiceReintegration(ICM_Bus_t *bus)
 
 void ICM_WatchdogTick(void)
 {
-    ICM_Bus_t *buses[ICM_SPI_BUS_COUNT] = { &g_bus_spi1, &g_bus_spi5, &g_bus_spi4 };
+    ICM_Bus_t *buses[ICM_SPI_BUS_COUNT] = {&g_bus_spi1, &g_bus_spi5, &g_bus_spi4,&g_bus_spi2, &g_bus_spi3, &g_bus_spi6};
     uint8_t    i;
 
     for (i = 0U; i < ICM_SPI_BUS_COUNT; i++)
@@ -1331,7 +1341,10 @@ static uint8_t ICM_BusIndex(const ICM_Bus_t *bus)
 {
     if (bus == &g_bus_spi1) { return 0U; }
     if (bus == &g_bus_spi5) { return 1U; }
-    return 2U;
+    if (bus == &g_bus_spi4) { return 2U; }
+    if (bus == &g_bus_spi3) { return 3U; }
+    if (bus == &g_bus_spi2) { return 4U; }
+    return 5U;
 }
 
 static uint8_t ICM_FindNextHealthy(const ICM_Bus_t *bus, uint8_t from)
