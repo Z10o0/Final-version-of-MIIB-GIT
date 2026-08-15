@@ -13,7 +13,7 @@
  * aligned(32) — граница cache line (32 байта на Cortex-M7).
  * ================================================================ */
 static uint8_t g_uart_tx_queue[UART_TX_QUEUE_DEPTH][UART_PKT_TOTAL_BYTES]
-    __attribute__((section(".RAM_D2"), aligned(32)));  /* [FIX] было aligned(4) */
+    __attribute__((section(".RAM_D1_DMA"), aligned(32)));
 
 static volatile uint8_t s_q_head     = 0U;
 static volatile uint8_t s_q_tail     = 0U;

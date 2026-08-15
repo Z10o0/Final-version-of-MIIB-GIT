@@ -96,7 +96,7 @@ extern "C" {
  *
  * Итоговый RAM_D2: 13 161 (фикс.) + 11 040 (queue) = 24 201 байт.
  */
-#define UART_TX_QUEUE_DEPTH   ICM_FIFO_POLL_PACKETS   /* 16 */
+#define UART_TX_QUEUE_DEPTH   (ICM_FIFO_POLL_PACKETS * 2U)
 
 _Static_assert(UART_PAYLOAD_BYTES == 686U,
                "Unexpected UART payload size: expected 2 + 36*19 = 686");
