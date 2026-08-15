@@ -61,6 +61,18 @@ void SysTick_Handler(void)  {}
  * ========================================================================== */
 void DMA1_Stream1_IRQHandler(void)
 {
+    /* [FIX v4] IT_FE для этого стрима больше не включается в
+     * UART_Telemetry_Init(), так как DMA FIFO mode для DMA1 Stream1
+     * ОТКЛЮЧЁН (LL_DMA_DisableFifoMode в main.c MX_USART1_UART_Init()).
+     * В Direct mode флаг FE не индицирует реальную ошибку и ранее
+     * срабатывал практически на каждом старте DMA
+     * (g_uart_dma_fe_count ~= g_uart_dma_start_count на практике).
+     * Флаг всё равно чистим на случай, если он взведён аппаратно,
+     * но НЕ считаем его как ошибку. */
+    if (LL_DMA_IsActiveFlag_FE1(DMA1) != 0U)
+    {
+        LL_DMA_ClearFlag_FE1(DMA1);
+    }
     if (LL_DMA_IsActiveFlag_TE1(DMA1) != 0U)
     {
         LL_DMA_ClearFlag_TE1(DMA1);
@@ -70,11 +82,6 @@ void DMA1_Stream1_IRQHandler(void)
     {
         LL_DMA_ClearFlag_DME1(DMA1);
         g_uart_dma_dme_count++;
-    }
-    if (LL_DMA_IsActiveFlag_FE1(DMA1) != 0U)
-    {
-        LL_DMA_ClearFlag_FE1(DMA1);
-        g_uart_dma_fe_count++;
     }
     if (LL_DMA_IsActiveFlag_TC1(DMA1) != 0U)
     {

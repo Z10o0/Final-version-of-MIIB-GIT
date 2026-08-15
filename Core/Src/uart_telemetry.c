@@ -1,12 +1,38 @@
 /* =============================================================================
  * uart_telemetry.c — USART1 telemetry via DMA1 Stream1, ring-buffer TX queue.
- * [FIX v3] Race-condition в producer устранён: слот резервируется атомарно
- *           ДО построения пакета. aligned(32) для cache-line корректности.
+ *
+ * [FIX v4] Исправления по итогам анализа реальных счётчиков в debug:
+ *  1. FE (FIFO error) диагностика для DMA1 Stream1 больше не считается
+ *     ошибкой — DMA FIFO mode для этого стрима ОТКЛЮЧЁН
+ *     (LL_DMA_DisableFifoMode в main.c), поэтому флаг FE в этом режиме
+ *     не имеет смысла как индикатор реальной ошибки и ранее давал
+ *     g_uart_dma_fe_count ~= g_uart_dma_start_count (ложный alarm на
+ *     каждом старте DMA). IT_FE больше не включается.
+ *  2. Двухфазная модель очереди: producer теперь резервирует индекс
+ *     tail (s_q_tail) ДО построения пакета, но инкрементирует
+ *     s_q_count и делает пакет видимым для consumer только ПОСЛЕ
+ *     того, как UART_BuildPacket() полностью завершён. Это устраняет
+ *     теоретическое окно, в котором consumer/DMA restart мог увидеть
+ *     "число элементов" больше, чем реально готовых пакетов.
+ *  3. Добавлены defensive asserts (в отладочной сборке) на выход
+ *     s_q_count за пределы [0, UART_TX_QUEUE_DEPTH] — раньше на скрине
+ *     наблюдалось g_uart_queue_count = 94 при глубине очереди 32,
+ *     что физически невозможно при корректной инвариантной логике.
+ *  4. UART_DMA_TxComplete() использует "быстрый" restart без
+ *     LL_DMA_DisableStream()+busy-wait, так как после TC поток уже
+ *     аппаратно остановлен — экономит время ISR на каждом из
+ *     ICM_FIFO_POLL_PACKETS кадров подряд.
  * ============================================================================= */
 
 #include "uart_telemetry.h"
 #include "icm45686_spi.h"
 #include "main.h"
+
+#ifndef NDEBUG
+#define UART_Q_ASSERT(cond)  do { if (!(cond)) { __BKPT(0); } } while (0)
+#else
+#define UART_Q_ASSERT(cond)  do { } while (0)
+#endif
 
 /* ================================================================
  * TX ring-buffer: Non-Cacheable D2 SRAM.
@@ -133,6 +159,11 @@ static void UART_BuildPacket(uint8_t pkt[UART_PKT_TOTAL_BYTES],
     pkt[UART_OFFSET_CRC + 1U] = (uint8_t)(crc >> 8U);
 }
 
+/* ================================================================
+ * Полный запуск DMA — используется только когда поток мог быть
+ * в неопределённом состоянии (первый старт из producer, когда
+ * s_dma_active был 0, но стрим не гарантированно disabled).
+ * ================================================================ */
 static void UART_StartDMAFromBuffer(uint8_t buf_idx)
 {
     LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_1);
@@ -156,6 +187,30 @@ static void UART_StartDMAFromBuffer(uint8_t buf_idx)
     LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_1);
 }
 
+/* ================================================================
+ * [FIX v4] Быстрый restart — вызывается ТОЛЬКО из UART_DMA_TxComplete().
+ * После TC поток DMA уже аппаратно остановлен HW-автоматом
+ * (Normal mode, EN сброшен самим DMA), поэтому DisableStream()+
+ * busy-wait избыточны и лишь удлиняют ISR на каждый из
+ * ICM_FIFO_POLL_PACKETS кадров подряд.
+ * ================================================================ */
+static void UART_StartDMAFromBuffer_Fast(uint8_t buf_idx)
+{
+    LL_DMA_ClearFlag_TC1(DMA1);
+    LL_DMA_ClearFlag_TE1(DMA1);
+    LL_DMA_ClearFlag_DME1(DMA1);
+    LL_DMA_ClearFlag_FE1(DMA1);
+
+    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_STREAM_1,
+                            (uint32_t)&g_uart_tx_queue[buf_idx][0]);
+    LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_1,
+                         (uint32_t)UART_PKT_TOTAL_BYTES);
+
+    s_dma_active = 1U;
+    g_uart_dma_start_count++;
+    LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_1);
+}
+
 void UART_Telemetry_Init(void)
 {
     uint8_t  i;
@@ -169,10 +224,15 @@ void UART_Telemetry_Init(void)
     LL_DMA_ClearFlag_DME1(DMA1);
     LL_DMA_ClearFlag_FE1(DMA1);
 
+    /* [FIX v4] IT_FE НЕ включается: DMA FIFO mode для этого стрима
+     * отключён (LL_DMA_DisableFifoMode(DMA1, LL_DMA_STREAM_1) в
+     * main.c MX_USART1_UART_Init()), флаг FE в Direct mode не несёт
+     * смысла реальной ошибки и ранее давал ложный алярм на каждом
+     * старте DMA (g_uart_dma_fe_count ~= g_uart_dma_start_count). */
     LL_DMA_EnableIT_TC(DMA1, LL_DMA_STREAM_1);
     LL_DMA_EnableIT_TE(DMA1, LL_DMA_STREAM_1);
     LL_DMA_EnableIT_DME(DMA1, LL_DMA_STREAM_1);
-    LL_DMA_EnableIT_FE(DMA1, LL_DMA_STREAM_1);
+    /* LL_DMA_EnableIT_FE(DMA1, LL_DMA_STREAM_1);  -- УБРАНО, см. выше */
 
     LL_USART_EnableDMAReq_TX(USART1);
 
@@ -199,18 +259,23 @@ void UART_Telemetry_Init(void)
 }
 
 /* ================================================================
- * Producer — [FIX v3] слот резервируется атомарно ДО построения пакета.
+ * Producer — [FIX v4] Двухфазная модель: reserve -> build -> commit.
  *
  * Порядок операций:
- *  1. Критическая секция: проверка полноты, резервирование слота
- *     (advance s_q_tail, increment s_q_count) — занимает ~10 тактов.
+ *  1. Критическая секция: проверка полноты по s_q_count, резервация
+ *     индекса слота local_tail = s_q_tail, продвижение s_q_tail.
+ *     s_q_count ЕЩЁ НЕ увеличивается — слот зарезервирован, но не
+ *     виден consumer'у как готовый элемент очереди.
  *  2. Построение пакета в зарезервированном слоте — вне критической
  *     секции, IRQ не блокируются.
- *  3. Критическая секция: если DMA простаивает — запустить передачу
- *     из s_q_head, изъять кадр из очереди.
+ *  3. Критическая секция: коммит — увеличение s_q_count (теперь
+ *     пакет считается готовым), обновление watermark, и если DMA
+ *     простаивает — немедленный запуск передачи из s_q_head.
  *
- * Это устраняет race: два одновременных вызова (теоретически при RTOS
- * или вложенных ISR) никогда не получат один и тот же local_tail.
+ * Это устраняет как race producer/producer (актуально при будущем
+ * переносе на RTOS/nested ISR), так и логическое окно, в котором
+ * consumer мог бы увидеть "количество элементов" больше, чем реально
+ * дописанных пакетов.
  * ================================================================ */
 void UART_BuildAndSendSyncFrame(void)
 {
@@ -224,7 +289,7 @@ void UART_BuildAndSendSyncFrame(void)
     {
         uint8_t local_tail;
 
-        /* --- Шаг 1: атомарное резервирование слота --- */
+        /* --- Шаг 1: атомарная проверка + резервирование индекса --- */
         __disable_irq();
         if (s_q_count >= (uint8_t)UART_TX_QUEUE_DEPTH)
         {
@@ -234,26 +299,32 @@ void UART_BuildAndSendSyncFrame(void)
         }
         local_tail = s_q_tail;
         s_q_tail   = (uint8_t)((s_q_tail + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+        __enable_irq();
+
+        /* --- Шаг 2: построение пакета (вне critical section) --- */
+        UART_BuildPacket(g_uart_tx_queue[local_tail], sample_idx);
+
+        /* --- Шаг 3: коммит слота + запуск DMA если простаивает --- */
+        __disable_irq();
         s_q_count++;
+        UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
+
         g_uart_enqueue_count++;
         g_uart_queue_count = s_q_count;
         if (g_uart_queue_count > g_uart_queue_high_watermark)
         {
             g_uart_queue_high_watermark = g_uart_queue_count;
         }
-        __enable_irq();
 
-        /* --- Шаг 2: построение пакета (вне critical section) --- */
-        UART_BuildPacket(g_uart_tx_queue[local_tail], sample_idx);
-
-        /* --- Шаг 3: запуск DMA если простаивает --- */
-        __disable_irq();
         if (s_dma_active == 0U)
         {
-            /* DMA простаивает — запускаем из головы очереди немедленно */
+            /* DMA простаивает — запускаем из головы очереди немедленно.
+             * Полная версия с disable+busy-wait, т.к. состояние стрима
+             * тут не гарантировано (первый старт после Init/idle). */
             UART_StartDMAFromBuffer(s_q_head);
             s_q_head = (uint8_t)((s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
             s_q_count--;
+            UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
             g_uart_queue_count = s_q_count;
         }
         __enable_irq();
@@ -263,17 +334,22 @@ void UART_BuildAndSendSyncFrame(void)
 /* ================================================================
  * Consumer: DMA TC IRQ.
  * Вызывать только из DMA1_Stream1_IRQHandler() после очистки TC flag.
+ * [FIX v4] Использует быстрый restart без DisableStream()+busy-wait,
+ * так как поток уже аппаратно остановлен HW после TC (Normal mode).
  * ================================================================ */
 void UART_DMA_TxComplete(void)
 {
     g_uart_dma_tc_count++;
     s_dma_active = 0U;
 
+    UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
+
     if (s_q_count > 0U)
     {
-        UART_StartDMAFromBuffer(s_q_head);
+        UART_StartDMAFromBuffer_Fast(s_q_head);
         s_q_head = (uint8_t)((s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
         s_q_count--;
+        UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
         g_uart_queue_count = s_q_count;
     }
 }
