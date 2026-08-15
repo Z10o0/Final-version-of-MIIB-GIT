@@ -197,9 +197,13 @@ void ICM_ParseAllFIFO(void)
             }
             else
             {
-                /* Byte[0] = SPI address/cmd byte, данные начинаются с byte[1] */
+                /* Шина SPI6 (b==5) использует отдельный буфер в RAM_D3 */
+                const uint8_t *src = (b == 5U)
+                    ? &g_fifo_data_spi6[s][1U]
+                    : &g_fifo_data[b][s][1U];
+
                 ICM_ParseFIFOBuffer(
-                    &g_fifo_data[b][s][1U],
+                    src,
                     (uint16_t)(ICM_FIFO_DMA_BUF_SIZE - 1U),
                     &g_sensor_batches[id]);
             }
