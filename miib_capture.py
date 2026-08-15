@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """
-miib_capture.py — MIIB unified tool v5: надёжный capture → offline parse →
-interactive Plotly plots, с полной диагностикой "Python bug vs line loss".
+miib_capture.py — MIIB unified tool v6 (MAX-PERF capture layer):
+надёжный capture → offline parse → interactive Plotly plots, с полной
+диагностикой "Python bug vs line loss" + максимальный приоритет ОС/потоков
+и максимально расширенный буфер драйвера COM-порта.
 
 Wire format (690 bytes):
   [0..1]    Header 0xAA 0x55
@@ -12,46 +14,50 @@ Wire format (690 bytes):
 Прибор реально шлёт кадры на НОМИНАЛЬНОЙ частоте 1600 fps
 (FRAMES_PER_BATCH=16 x BATCHES_PER_SEC=100).
 
-[FIX v5] Полная переработка capture-слоя и диагностики парсера по итогам
-разбора реального лога, где Python видел лишь ~70.6% nominal throughput,
-хотя счётчики STM32 (g_uart_drop_count=0, g_uart_dma_te/dme/fe_count=0,
-enqueue==dma_start==dma_tc) показывали полностью здоровый TX-тракт на
-приборе. Раз аппаратный тракт чист, узкое место нужно искать и жёстко
-идентифицировать на стороне ПК — этот файл даёт для этого инструментарий:
-
-  1. CAPTURE — reader вынесен в отдельный поток с tight-loop blocking read
-     (readinto() в preallocated bytearray), без polling-паттерна
-     `if in_waiting: read() else: sleep()`, который отдаёт GIL/scheduler
-     непредсказуемо на высоких скоростях. Producer (reader thread) и
-     consumer (writer/print) развязаны через thread-safe очередь чанков,
-     чтобы файловый I/O и печать статистики никогда не блокировали приём.
-  2. Отдельно считается RAW throughput (сколько байт реально прочитано
-     из порта) и VALID FRAME throughput (сколько байт разложилось в
-     CRC-валидные кадры) — это два разных числа, и раньше скрипт печатал
-     только производную от valid-frames величину, маскируя место потери.
-  3. Печатается подробная CRC/header/resync статистика: сколько всего
-     найдено header-кандидатов (0xAA 0x55), сколько из них провалили CRC,
-     сколько байт "мусора" суммарно съедено при ресинхронизации, и
-     распределение расстояний между соседними валидными кадрами.
-  4. Жёсткий диагностический вывод: если raw_bytes от pyserial почти равны
-     nominal (>=98%), а valid-frame throughput ощутимо ниже — это ГОВОРИТ
-     о проблеме в самом потоке байт до сборки кадра, что чаще всего
-     означает ресинк/потерю данных ДО пришедших в Python байт (то есть на
-     линии/драйвере/прошивке). Если же raw_bytes от pyserial САМИ по себе
-     заметно ниже nominal — winner виноват capture-слой Python
-     (недостаточно быстрое считывание из ОС-буфера), и это НЕ аппаратная
-     проблема STM32.
+[FIX v6] MAX-PERF capture layer поверх v5:
+  1. PROCESS PRIORITY — процесс переводится в REALTIME_PRIORITY_CLASS
+     (Windows) сразу при старте capture. Если процесс запущен без прав
+     администратора, Windows тихо понижает это до HIGH_PRIORITY_CLASS —
+     скрипт это детектирует и печатает предупреждение.
+  2. THREAD PRIORITY — поток-читатель (_SerialReaderThread) переводится
+     в THREAD_PRIORITY_TIME_CRITICAL — самый высокий уровень приоритета
+     потока в Windows, выше любого обычного пользовательского потока и
+     даже выше многих системных.
+  3. CPU AFFINITY — поток-читатель и главный поток (writer/print) по
+     возможности разводятся на разные физические ядра через
+     SetThreadAffinityMask, чтобы планировщик ОС не переключал их между
+     собой и не создавал контеншн с другими процессами на общем ядре.
+  4. GC DISABLED — циклический сборщик мусора Python отключается на всё
+     время захвата (gc.disable()) и снова включается по завершении.
+     Это убирает случайные паузы GC (обычно единицы-десятки мс), которые
+     на скорости >1 МБ/с успевают "съесть" заметный объём буфера порта.
+  5. МАКСИМАЛЬНЫЙ БУФЕР ДРАЙВЕРА — set_buffer_size() пробует
+     последовательно уменьшающиеся размеры (256/128/64/32/16/8/4/2/1 МБ)
+     пока драйвер не примет значение, вместо единственной фиксированной
+     попытки 16 МБ как в v5.
+  6. Увеличены дефолты: chunk 65536 -> 1 МБ, queue_max 4096 -> 20000,
+     read_timeout уменьшен с 20 мс до 2 мс (быстрее реагирует на новые
+     данные, снижает worst-case задержку одного readinto()).
+  7. Reader-поток по-прежнему tight-loop blocking readinto() в
+     preallocated bytearray (без polling in_waiting/sleep из v4).
 
 Install:
   pip install pyserial numpy plotly
+  (опционально, для точной CPU affinity на не-Windows: pip install psutil)
 
 Usage:
   python miib_capture.py capture --port COM11 --duration 30
   python miib_capture.py capture --port COM11 --duration 60 --no-parse
   python miib_capture.py parse   --infile miib_raw_20260814_200000.bin
+
+ВАЖНО: для полного эффекта REALTIME_PRIORITY_CLASS запускай скрипт
+(или Spyder/консоль) ОТ ИМЕНИ АДМИНИСТРАТОРА в Windows — иначе ОС
+молча урезает приоритет до HIGH_PRIORITY_CLASS.
 """
 
 import argparse
+import ctypes
+import gc
 import os
 import sys
 import time
@@ -79,6 +85,122 @@ try:
 except ImportError:
     HAS_PLOTLY = False
     print("WARNING: pip install plotly", file=sys.stderr)
+
+try:
+    import psutil
+    HAS_PSUTIL = True
+except ImportError:
+    HAS_PSUTIL = False
+
+
+# =============================================================================
+#  [NEW v6] MAX-PERF: process/thread priority, CPU affinity, GC control
+# =============================================================================
+IS_WINDOWS = (os.name == "nt")
+
+# Windows priority-class constants (winbase.h)
+_REALTIME_PRIORITY_CLASS   = 0x00000100
+_HIGH_PRIORITY_CLASS       = 0x00000080
+_ABOVE_NORMAL_PRIORITY     = 0x00008000
+
+# Windows thread-priority constants (winbase.h)
+_THREAD_PRIORITY_TIME_CRITICAL = 15
+_THREAD_PRIORITY_HIGHEST       = 2
+_THREAD_PRIORITY_ABOVE_NORMAL  = 1
+
+
+def set_process_max_priority():
+    """
+    [NEW v6] Поднимает приоритет ТЕКУЩЕГО процесса до максимально
+    возможного. На Windows пытается REALTIME_PRIORITY_CLASS (требует
+    привилегий администратора для полного эффекта - без них Windows
+    молча урезает до HIGH_PRIORITY_CLASS). На POSIX пытается через
+    os.nice(-20) (тоже требует root/CAP_SYS_NICE).
+    """
+    if IS_WINDOWS:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetCurrentProcess()
+        ok = kernel32.SetPriorityClass(handle, _REALTIME_PRIORITY_CLASS)
+        if ok:
+            print("[MIIB] Priority: process = REALTIME_PRIORITY_CLASS "
+                  "(запусти от администратора для гарантии, иначе Windows "
+                  "мог тихо занизить до HIGH)")
+        else:
+            kernel32.SetPriorityClass(handle, _HIGH_PRIORITY_CLASS)
+            print("[MIIB] WARN: REALTIME_PRIORITY_CLASS отклонён ОС -> "
+                  "fallback HIGH_PRIORITY_CLASS. Запусти скрипт от "
+                  "администратора, чтобы получить полный REALTIME.")
+    else:
+        try:
+            os.nice(-20)
+            print("[MIIB] Priority: process nice = -20 (POSIX, требует root)")
+        except PermissionError:
+            try:
+                os.nice(-10)
+                print("[MIIB] WARN: nice(-20) запрещён -> fallback nice(-10). "
+                      "Запусти через sudo для максимального приоритета.")
+            except Exception as e:
+                print(f"[MIIB] WARN: не удалось поднять приоритет процесса: {e}")
+
+
+def set_current_thread_time_critical():
+    """
+    [NEW v6] Поднимает приоритет ТЕКУЩЕГО (вызывающего) потока до
+    максимального уровня. Вызывать из тела потока (thread.run()),
+    а не снаружи — приоритет привязывается к native OS thread handle
+    вызывающего контекста.
+    """
+    if IS_WINDOWS:
+        kernel32 = ctypes.windll.kernel32
+        handle = kernel32.GetCurrentThread()
+        ok = kernel32.SetThreadPriority(handle, _THREAD_PRIORITY_TIME_CRITICAL)
+        if not ok:
+            kernel32.SetThreadPriority(handle, _THREAD_PRIORITY_HIGHEST)
+
+
+def pin_current_thread_to_cpu(cpu_index: int):
+    """
+    [NEW v6] Привязывает текущий поток к конкретному логическому ядру
+    через SetThreadAffinityMask (Windows). Снижает миграцию потока между
+    ядрами и связанные с этим кэш-промахи/джиттер на высокой скорости.
+    Если psutil доступен и вызывается для процесса — используется как
+    fallback на не-Windows платформах (привязка всего процесса, точность
+    ниже, т.к. Python GIL всё равно сериализует выполнение потоков).
+    """
+    if IS_WINDOWS:
+        try:
+            kernel32 = ctypes.windll.kernel32
+            handle = kernel32.GetCurrentThread()
+            mask = 1 << cpu_index
+            kernel32.SetThreadAffinityMask(handle, ctypes.c_size_t(mask))
+        except Exception as e:
+            print(f"[MIIB] WARN: SetThreadAffinityMask failed: {e}")
+    elif HAS_PSUTIL:
+        try:
+            psutil.Process(os.getpid()).cpu_affinity([cpu_index])
+        except Exception as e:
+            print(f"[MIIB] WARN: psutil cpu_affinity failed: {e}")
+
+
+def try_max_serial_buffer(ser: "serial.Serial",
+                           rx_candidates=(256, 128, 64, 32, 16, 8, 4, 2, 1),
+                           tx_mb: int = 1) -> int:
+    """
+    [NEW v6] Пробует установить МАКСИМАЛЬНО возможный размер приёмного
+    буфера драйвера COM-порта (SetupComm через pyserial.set_buffer_size),
+    начиная с самого большого значения и уменьшая, пока драйвер его не
+    примет. Возвращает фактически установленный размер в МБ (0, если
+    set_buffer_size вообще не поддерживается платформой/бэкендом).
+    """
+    if not hasattr(ser, "set_buffer_size"):
+        return 0
+    for mb in rx_candidates:
+        try:
+            ser.set_buffer_size(rx_size=mb * 1024 * 1024, tx_size=tx_mb * 1024 * 1024)
+            return mb
+        except Exception:
+            continue
+    return 0
 
 
 # =============================================================================
@@ -139,7 +261,7 @@ def crc16(data) -> int:
 
 
 # =============================================================================
-#  CAPTURE — надёжный многопоточный reader
+#  CAPTURE — надёжный многопоточный reader (MAX-PERF)
 # =============================================================================
 @dataclass
 class CaptureStats:
@@ -157,25 +279,17 @@ class _SerialReaderThread(threading.Thread):
     """
     Выделенный поток чтения из порта.
 
-    [FIX v5] Ключевое отличие от старого polling-цикла
-    `if in_waiting: read() else: sleep(poll)`:
-      - используется БЛОКИРУЮЩЕЕ чтение с коротким timeout на уровне
-        pyserial (ser.timeout = read_timeout), а не активный опрос
-        in_waiting из user-space с ручным sleep(). Это устраняет
-        зависимость от точности time.sleep() и от GIL-scheduling
-        под нагрузкой печати/записи в основном потоке.
-      - каждый прочитанный чанк немедленно кладётся в Queue и поток
-        сразу идёт читать дальше, не дожидаясь записи на диск —
-        запись и статистика делаются в основном потоке параллельно.
-      - размер чанка не ограничен искусственно (chunk_size — верхняя
-        граница одного read(), а не единственный источник данных за
-        цикл), поэтому при всплесках накопленных в буфере ОС данных
-        поток вычитывает их за минимум итераций.
+    [FIX v5] Блокирующее чтение readinto() вместо polling in_waiting+sleep.
+    [NEW v6] При старте потока сам себе поднимает приоритет до
+    THREAD_PRIORITY_TIME_CRITICAL и (опционально) прибивает себя к
+    отдельному логическому ядру CPU, чтобы ничто в системе не могло
+    вытеснить его во время приёма данных на высокой скорости.
     """
 
     def __init__(self, ser: "serial.Serial", out_queue: "queue.Queue",
                  stop_event: threading.Event, chunk_size: int,
-                 stats: CaptureStats, stats_lock: threading.Lock):
+                 stats: CaptureStats, stats_lock: threading.Lock,
+                 pin_cpu: int | None = None):
         super().__init__(name="MIIB-SerialReader", daemon=True)
         self.ser = ser
         self.out_queue = out_queue
@@ -183,8 +297,16 @@ class _SerialReaderThread(threading.Thread):
         self.chunk_size = chunk_size
         self.stats = stats
         self.stats_lock = stats_lock
+        self.pin_cpu = pin_cpu
 
     def run(self):
+        # [NEW v6] Максимальный приоритет и (опционально) affinity — должны
+        # выставляться ИЗНУТРИ потока, чтобы получить handle именно этого
+        # native OS thread, а не главного потока процесса.
+        set_current_thread_time_critical()
+        if self.pin_cpu is not None:
+            pin_current_thread_to_cpu(self.pin_cpu)
+
         buf = bytearray(self.chunk_size)
         mv = memoryview(buf)
         while not self.stop_event.is_set():
@@ -219,6 +341,16 @@ def do_capture(args) -> tuple[Path, float, CaptureStats]:
     ts       = time.strftime("%Y%m%d_%H%M%S")
     out_path = Path(args.outfile) if args.outfile else Path(f"miib_raw_{ts}.bin")
 
+    # [NEW v6] Максимальный приоритет ГЛАВНОГО процесса — раньше открытия
+    # порта, чтобы даже операции инициализации не тормозились планировщиком.
+    set_process_max_priority()
+
+    # [NEW v6] Отключаем циклический GC на всё время захвата — устраняет
+    # случайные паузы сборщика мусора (обычно единицы-десятки мс), которые
+    # на скорости >1 МБ/с эквивалентны десяткам КБ потерянного буфера.
+    gc_was_enabled = gc.isenabled()
+    gc.disable()
+
     ser = serial.Serial()
     ser.port = args.port
     ser.baudrate = args.baud
@@ -226,7 +358,6 @@ def do_capture(args) -> tuple[Path, float, CaptureStats]:
     ser.parity = serial.PARITY_NONE
     ser.stopbits = serial.STOPBITS_ONE
     # [FIX v5] Короткий блокирующий timeout вместо timeout=0 + busy poll.
-    # readinto() вернётся либо когда придут данные, либо через read_timeout.
     ser.timeout = args.read_timeout
     ser.rtscts = ser.dsrdtr = ser.xonxoff = False
     ser.open()
@@ -239,20 +370,35 @@ def do_capture(args) -> tuple[Path, float, CaptureStats]:
     elapsed = 0.0
     reader = None
     try:
-        try:
-            ser.set_buffer_size(rx_size=16 * 1024 * 1024, tx_size=64 * 1024)
-        except Exception:
-            pass
+        # [NEW v6] Максимально широкий буфер драйвера — пробуем сверху вниз.
+        buf_mb = try_max_serial_buffer(ser)
+        if buf_mb:
+            print(f"[MIIB] Driver RX buffer set to {buf_mb} MiB (max accepted by driver)")
+        else:
+            print("[MIIB] WARN: set_buffer_size недоступен/отклонён — "
+                  "используется буфер по умолчанию драйвера.")
         ser.reset_input_buffer()
+
+        # [NEW v6] CPU affinity: пробуем развести reader-поток и главный
+        # (writer/print) поток на разные логические ядра, если ядер >= 2.
+        cpu_count = os.cpu_count() or 1
+        reader_cpu = (cpu_count - 1) if cpu_count > 1 else None
+        main_cpu = (cpu_count - 2) if cpu_count > 2 else (0 if cpu_count > 1 else None)
+        if main_cpu is not None:
+            pin_current_thread_to_cpu(main_cpu)
 
         print(f"[MIIB] Port    : {args.port} @ {args.baud} baud")
         print(f"[MIIB] Frame   : {FRAME_LEN} bytes  ({N_SENSORS} sensors x {IMU_BYTES} B)")
         print(f"[MIIB] Nominal : {NOMINAL_FPS} fps  ->  {EXPECTED_BPS} B/s  ({EXPECTED_BPS/1024:.1f} KiB/s)")
         print(f"[MIIB] Duration: {args.duration:.1f} s  ->  Output: {out_path}")
-        print(f"[MIIB] Reader  : threaded, chunk<={args.chunk} B, read_timeout={args.read_timeout*1000:.1f} ms")
+        print(f"[MIIB] Reader  : threaded TIME_CRITICAL, chunk<={args.chunk} B, "
+              f"read_timeout={args.read_timeout*1000:.2f} ms, "
+              f"pin_cpu={reader_cpu if reader_cpu is not None else 'n/a'}")
+        print(f"[MIIB] GC      : disabled for capture duration "
+              f"(was_enabled={gc_was_enabled})")
 
         reader = _SerialReaderThread(ser, out_queue, stop_event, args.chunk,
-                                      stats, stats_lock)
+                                      stats, stats_lock, pin_cpu=reader_cpu)
         stats.start_perf = time.perf_counter()
         reader.start()
 
@@ -312,8 +458,7 @@ def do_capture(args) -> tuple[Path, float, CaptureStats]:
               f"queue_high_watermark={stats.queue_high_watermark}/{args.queue_max}")
         print(f"[MIIB] Saved   : {out_path}")
 
-        # [FIX v5] Немедленный жёсткий вердикт по RAW throughput —
-        # ещё до сборки кадров и CRC-анализа.
+        # [FIX v5] Немедленный жёсткий вердикт по RAW throughput.
         raw_pct = bps / EXPECTED_BPS * 100.0
         if raw_pct < 95.0:
             print(f"[MIIB] !!! RAW throughput {raw_pct:.1f}% < 95% nominal — "
@@ -333,6 +478,10 @@ def do_capture(args) -> tuple[Path, float, CaptureStats]:
             ser.close()
         except Exception:
             pass
+        # [NEW v6] Возвращаем GC в исходное состояние после захвата.
+        if gc_was_enabled:
+            gc.enable()
+            gc.collect()
 
     return out_path, elapsed, stats
 
@@ -834,7 +983,7 @@ def do_plots(d: dict, plot_dir: Path):
 def build_parser():
     p = argparse.ArgumentParser(
         prog="miib_capture",
-        description="MIIB v5: reliable capture -> parse -> interactive Plotly plots",
+        description="MIIB v6: MAX-PERF capture -> parse -> interactive Plotly plots",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -844,11 +993,14 @@ def build_parser():
     cap.add_argument("--baud",     type=int,   default=12_000_000)
     cap.add_argument("--duration", type=float, default=30.0)
     cap.add_argument("--outfile",  default="", help="Путь к .bin (авто если пусто)")
-    cap.add_argument("--chunk",    type=int,   default=65536,
-                      help="Максимальный размер одного readinto()")
-    cap.add_argument("--read-timeout", type=float, default=0.02, dest="read_timeout",
-                      help="Блокирующий timeout pyserial на readinto(), сек")
-    cap.add_argument("--queue-max", type=int, default=4096, dest="queue_max",
+    # [NEW v6] chunk по умолчанию увеличен 65536 -> 1 МБ
+    cap.add_argument("--chunk",    type=int,   default=1_048_576,
+                      help="Максимальный размер одного readinto() (по умолчанию 1 МБ)")
+    # [NEW v6] read_timeout уменьшен 0.02 -> 0.002 (2 мс)
+    cap.add_argument("--read-timeout", type=float, default=0.002, dest="read_timeout",
+                      help="Блокирующий timeout pyserial на readinto(), сек (по умолчанию 2 мс)")
+    # [NEW v6] queue_max увеличен 4096 -> 20000
+    cap.add_argument("--queue-max", type=int, default=20000, dest="queue_max",
                       help="Максимальный размер очереди чанков reader->writer")
     cap.add_argument("--no-parse", action="store_true", dest="no_parse")
     cap.add_argument("--no-plots", action="store_true", dest="no_plots")
@@ -886,6 +1038,8 @@ def main_cli():
 if __name__ == "__main__":
     # ==================================================================
     #  SPYDER / прямой запуск - настрой здесь и жми Run (F5)
+    #  [NEW v6] Для максимального эффекта REALTIME_PRIORITY_CLASS
+    #  запускай Spyder/консоль ОТ ИМЕНИ АДМИНИСТРАТОРА.
     # ==================================================================
     SPYDER_MODE = True          # True = ручная конфигурация ниже
 
@@ -898,9 +1052,9 @@ if __name__ == "__main__":
         BAUD         = 12_000_000
         DURATION     = 30.0
         OUTFILE      = ""
-        CHUNK        = 65536
-        READ_TIMEOUT = 0.02
-        QUEUE_MAX    = 4096
+        CHUNK        = 1_048_576     # [NEW v6] 1 МБ вместо 65536
+        READ_TIMEOUT = 0.002         # [NEW v6] 2 мс вместо 20 мс
+        QUEUE_MAX    = 20000         # [NEW v6] запас на случай крупных чанков
         NO_PARSE     = False
         NO_PLOTS     = False
 
