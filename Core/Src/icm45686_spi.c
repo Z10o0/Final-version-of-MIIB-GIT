@@ -1106,6 +1106,20 @@ static void ICM_AdvanceSensor(ICM_Bus_t *bus)
     if (prev_idx >= ICM_SENSORS_PER_BUS) { bus->state = BUS_COMPLETE; ICM_FinishBus(bus); return; }
 
     ICM_CS_High(&bus->sensors[prev_idx]);
+
+    /* [FIX] Успешное завершение чтения сбрасывает fault_count.
+     * Раньше fault_count накапливался КУМУЛЯТИВНО за всё время жизни
+     * прошивки и никогда не уменьшался на успехе — единственный сброс
+     * происходил в ICM_ServiceReintegration() и только ПОСЛЕ полной
+     * изоляции датчика (fault=1) по истечении reint_countdown. Это
+     * означало, что редкие транзиентные глитчи (один сбой раз в
+     * несколько минут) со временем всё равно накапливались до порога
+     * ICM_SENSOR_MAX_FAULTS_LOCAL и ошибочно изолировали физически
+     * исправный датчик, вместо того чтобы считать только N ошибок
+     * ПОДРЯД. Теперь любой успешный ICM_AdvanceSensor() обнуляет
+     * счётчик, восстанавливая исходный смысл "N сбоев подряд". */
+    bus->sensors[prev_idx].fault_count = 0U;
+
     LL_SPI_Disable(bus->spi);
     __DSB();
 
