@@ -178,8 +178,15 @@ void ICM_ParseFIFOBuffer(const uint8_t *raw_buf,
  * (ICM_FIFO_DMA_BUF_SIZE - 1) байт, начиная с байта [1] (байт [0] —
  * SPI cmd/addr, данные не содержит).
  */
+volatile uint32_t g_icm_parse_cyc_last = 0U;
+volatile uint32_t g_icm_parse_cyc_max  = 0U;
+volatile uint32_t g_icm_parse_us_last  = 0U;
+volatile uint32_t g_icm_parse_us_max   = 0U;
+
 void ICM_ParseAllFIFO(void)
 {
+    uint32_t start_cyc = DWT->CYCCNT;
+
     uint8_t b, s, id;
 
     for (b = 0U; b < ICM_SPI_BUS_COUNT; b++)
@@ -197,7 +204,6 @@ void ICM_ParseAllFIFO(void)
             }
             else
             {
-                /* Шина SPI6 (b==5) использует отдельный буфер в RAM_D3 */
                 const uint8_t *src = (b == 5U)
                     ? &g_fifo_data_spi6[s][1U]
                     : &g_fifo_data[b][s][1U];
@@ -209,4 +215,12 @@ void ICM_ParseAllFIFO(void)
             }
         }
     }
+
+    uint32_t delta_cyc = DWT->CYCCNT - start_cyc;
+    g_icm_parse_cyc_last = delta_cyc;
+    if (delta_cyc > g_icm_parse_cyc_max) g_icm_parse_cyc_max = delta_cyc;
+
+    uint32_t us = delta_cyc / (SystemCoreClock / 1000000UL);
+    g_icm_parse_us_last = us;
+    if (us > g_icm_parse_us_max) g_icm_parse_us_max = us;
 }

@@ -16,6 +16,25 @@
  * 12.  FIFO: flush → config0 → watermark → config4(TMST) → config3 → IF_EN
  *      [FIX] Порядок изменён: FLUSH первый, FIFO_CONFIG4 ДО IF_EN
  * 13.  Startup delay 200 мс
+ *
+ * [REWRITE v3] Устранён обязательный второй IRQ (SPI EOT) на каждый сенсор.
+ * Раньше: DMA RX TC -> ICM_OnDmaRxComplete() ТОЛЬКО взводил LL_SPI_EnableIT_EOT,
+ * а фактический переход к следующему сенсору происходил ИСКЛЮЧИТЕЛЬНО в
+ * SPIx_IRQHandler -> ICM_OnSpiEot(). Это давало 2 IRQ на каждый из 36 сенсоров
+ * (72 IRQ/batch), хотя к моменту DMA RX TC аппаратный EOT практически всегда
+ * уже установлен (SPI заканчивает передачу последнего байта одновременно
+ * или раньше завершения DMA-копирования).
+ *
+ * Теперь ICM_OnDmaRxComplete() сначала проверяет EOT-флаг:
+ *   - если EOT уже установлен (штатный случай) — сенсор завершается и
+ *     запускается следующий СРАЗУ ЖЕ, внутри этого же DMA ISR, без включения
+ *     SPI EOT-прерывания вообще;
+ *   - если EOT ещё не готов (редкий edge-case, например из-за джиттера
+ *     между DMA- и SPI-доменами) — включается LL_SPI_EnableIT_EOT() как и
+ *     раньше, и SPIx_IRQHandler отрабатывает как fallback-путь.
+ * Общий код "завершить сенсор + запустить следующий" вынесен в
+ * ICM_AdvanceSensor() и используется из обоих путей — логика идентична
+ * старой ICM_OnSpiEot(), различается только ТОЧКА ВЫЗОВА.
  * =============================================================================
  */
 
@@ -37,29 +56,30 @@ static uint8_t  ICM_FindNextHealthy    (const ICM_Bus_t *bus, uint8_t from);
 static void     ICM_ClearDmaFlags      (const ICM_Bus_t *bus);
 static void     ICM_WaitIRegReady      (void);
 static void     ICM_StartBusRead       (ICM_Bus_t *bus, uint8_t idx);
-static void     ICM_OnDmaRxComplete    (ICM_Bus_t *bus);           /* [REWRITE v2] заменяет ICM_NextSensor */
-static void     ICM_OnSpiEot           (ICM_Bus_t *bus);
+static void     ICM_OnDmaRxComplete    (ICM_Bus_t *bus);           /* [REWRITE v3] теперь может завершить сенсор inline */
+static void     ICM_AdvanceSensor      (ICM_Bus_t *bus);           /* [NEW v3] общий код завершения сенсора (fast-path + fallback) */
+static void     ICM_OnSpiEot           (ICM_Bus_t *bus);           /* [REWRITE v3] тонкий fallback-враппер над ICM_AdvanceSensor */
 static void     ICM_FinishBus          (ICM_Bus_t *bus);
 static void     ICM_TryCompleteBatch   (void);
 static void     ICM_MarkFault          (ICM_Sensor_t *s);
-static void     ICM_RecoverBus         (ICM_Bus_t *bus);           /* [NEW] */
-static uint8_t  ICM_BusTimedOut        (const ICM_Bus_t *bus);     /* [NEW] */
-static void     ICM_ServiceReintegration(ICM_Bus_t *bus);          /* [NEW] */
-static void     ICM_BusesInit_PrecomputeDescriptors(ICM_Bus_t *bus, uint8_t bus_idx); /* [NEW] */
-static uint32_t ICM_DWT_ElapsedUs      (uint32_t cyc_start);       /* [NEW] */
-static void     ICM_SetEvent           (uint32_t mask);            /* [NEW] */
+static void     ICM_RecoverBus         (ICM_Bus_t *bus);
+static uint8_t  ICM_BusTimedOut        (const ICM_Bus_t *bus);
+static void     ICM_ServiceReintegration(ICM_Bus_t *bus);
+static void     ICM_BusesInit_PrecomputeDescriptors(ICM_Bus_t *bus, uint8_t bus_idx);
+static uint32_t ICM_DWT_ElapsedUs      (uint32_t cyc_start);
+static void     ICM_SetEvent           (uint32_t mask);
 
 #define ICM_SENSOR_MAX_FAULTS_LOCAL     3U     /* число подряд идущих ошибок до изоляции датчика */
 #define ICM_REINTEGRATION_CYCLES_LOCAL  500U   /* число watchdog-тиков до повторной попытки reintegration */
 #define ICM_DMA_TIMEOUT_US_LOCAL        600U   /* максимально допустимая длительность burst-транзакции, мкс */
 
-volatile uint32_t g_icm_events = 0U;   /* [NEW] атомарный event bitmap */
-icm_profile_t      g_icm_profile;       /* [NEW] DWT-профилирование */
+volatile uint32_t g_icm_events = 0U;   /* атомарный event bitmap */
+icm_profile_t      g_icm_profile;       /* DWT-профилирование */
 
 uint8_t g_fifo_data[ICM_SPI_BUS_COUNT][ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE]
     __attribute__((section(".RAM_D2"), aligned(32)));
 
-/* [NEW] BDMA видит только D3 — общий g_fifo_data (RAM_D2) для SPI6 не подходит.
+/* BDMA видит только D3 — общий g_fifo_data (RAM_D2) для SPI6 не подходит.
  * Отдельный буфер в RAM_D3 для шины SPI6 (bus_idx = 5). */
 uint8_t g_fifo_data_spi6[ICM_SENSORS_PER_BUS][ICM_FIFO_DMA_BUF_SIZE]
     __attribute__((section(".RAM_D3"), aligned(32)));
@@ -229,7 +249,7 @@ ICM_Bus_t g_bus_spi6 =
     }
 };
 
-/* [NEW] Заполняет icm_dma_desc_t для всех 6 датчиков шины ОДИН РАЗ при старте.
+/* Заполняет icm_dma_desc_t для всех 6 датчиков шины ОДИН РАЗ при старте.
  * Hot path (ICM_StartBusRead) больше не вычисляет адреса — только копирует
  * готовые значения из descriptor'а в регистры DMA. */
 static void ICM_BusesInit_PrecomputeDescriptors(ICM_Bus_t *bus, uint8_t bus_idx)
@@ -246,7 +266,7 @@ static void ICM_BusesInit_PrecomputeDescriptors(ICM_Bus_t *bus, uint8_t bus_idx)
     }
 }
 
-/* [NEW] Инициализация DWT cycle counter — используется для DWT-based
+/* Инициализация DWT cycle counter — используется для DWT-based
  * задержек (см. ICM_DelayUs) и watchdog-таймаутов вместо NOP-loop,
  * непредсказуемого на суперскалярном конвейере Cortex-M7. */
 void ICM_DWT_Init(void)
@@ -260,37 +280,37 @@ void ICM_BusesInit(void)
 {
     uint8_t i;
 
-    /* [NEW] DWT должен быть готов до первого вызова ICM_DelayUs()/watchdog */
+    /* DWT должен быть готов до первого вызова ICM_DelayUs()/watchdog */
     ICM_DWT_Init();
 
     g_bus_spi1.tx_buf = g_tx_spi1;
     g_bus_spi5.tx_buf = g_tx_spi5;
     g_bus_spi4.tx_buf = g_tx_spi4;
 
-    g_bus_spi2.tx_buf = g_tx_spi2;   /* [NEW] */
-    g_bus_spi3.tx_buf = g_tx_spi3;   /* [NEW] */
-    g_bus_spi6.tx_buf = g_tx_spi6;   /* [NEW] */
+    g_bus_spi2.tx_buf = g_tx_spi2;
+    g_bus_spi3.tx_buf = g_tx_spi3;
+    g_bus_spi6.tx_buf = g_tx_spi6;
     /* memset здесь — INIT-TIME, не hot path, поэтому остаётся без изменений.
      * Runtime memset() в ICM_StartBusRead() убран полностью (см. ниже):
      * TX-шаблон формируется один раз и больше никогда не перезаписывается. */
     memset(g_fifo_data, 0x00U, sizeof(g_fifo_data));
-    memset(g_fifo_data_spi6, 0x00U, sizeof(g_fifo_data_spi6));  /* [NEW] */
+    memset(g_fifo_data_spi6, 0x00U, sizeof(g_fifo_data_spi6));
 
     memset(g_tx_spi1,   0xFFU, sizeof(g_tx_spi1));
     memset(g_tx_spi5,   0xFFU, sizeof(g_tx_spi5));
     memset(g_tx_spi4,   0xFFU, sizeof(g_tx_spi4));
 
-    memset(g_tx_spi2, 0xFFU, sizeof(g_tx_spi2));   /* [NEW] */
-    memset(g_tx_spi3, 0xFFU, sizeof(g_tx_spi3));   /* [NEW] */
-    memset(g_tx_spi6, 0xFFU, sizeof(g_tx_spi6));   /* [NEW] */
+    memset(g_tx_spi2, 0xFFU, sizeof(g_tx_spi2));
+    memset(g_tx_spi3, 0xFFU, sizeof(g_tx_spi3));
+    memset(g_tx_spi6, 0xFFU, sizeof(g_tx_spi6));
 
     g_tx_spi1[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
     g_tx_spi5[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
     g_tx_spi4[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
 
-    g_tx_spi2[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;  /* [NEW] */
-    g_tx_spi3[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;  /* [NEW] */
-    g_tx_spi6[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;  /* [NEW] */
+    g_tx_spi2[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
+    g_tx_spi3[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
+    g_tx_spi6[0] = ICM45686_REG_FIFO_DATA | ICM45686_SPI_READ_BIT;
 
     for (i = 0U; i < ICM_SENSORS_PER_BUS; i++)
     {
@@ -298,9 +318,9 @@ void ICM_BusesInit(void)
         ICM_CS_High(&g_bus_spi5.sensors[i]);
         ICM_CS_High(&g_bus_spi4.sensors[i]);
 
-        ICM_CS_High(&g_bus_spi2.sensors[i]);   /* [NEW] */
-        ICM_CS_High(&g_bus_spi3.sensors[i]);   /* [NEW] */
-        ICM_CS_High(&g_bus_spi6.sensors[i]);   /* [NEW] */
+        ICM_CS_High(&g_bus_spi2.sensors[i]);
+        ICM_CS_High(&g_bus_spi3.sensors[i]);
+        ICM_CS_High(&g_bus_spi6.sensors[i]);
 
         g_bus_spi1.sensors[i].fault = 0U;
         g_bus_spi5.sensors[i].fault = 0U;
@@ -325,14 +345,14 @@ void ICM_BusesInit(void)
     }
 
 
-    /* [NEW] Precompute DMA descriptors — устраняет runtime address math
+    /* Precompute DMA descriptors — устраняет runtime address math
      * из hot path ICM_StartBusRead(). */
     ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi1, 0U);
     ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi5, 1U);
     ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi4, 2U);
 
-    ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi2, 3U);   /* [NEW] */
-    ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi3, 4U);   /* [NEW] */
+    ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi2, 3U);
+    ICM_BusesInit_PrecomputeDescriptors(&g_bus_spi3, 4U);
     /* SPI6 использует ОТДЕЛЬНЫЙ буфер g_fifo_data_spi6, не g_fifo_data[5][...] —
      * прекомпутация для него делается вручную: */
     for (i = 0U; i < ICM_SENSORS_PER_BUS; i++)
@@ -342,7 +362,7 @@ void ICM_BusesInit(void)
         g_bus_spi6.dma_desc[i].length      = (uint16_t)ICM_FIFO_DMA_BUF_SIZE;
     }
 
-    /* [REWRITE v2] Явная FSM вместо разрозненных флагов */
+    /* Явная FSM вместо разрозненных флагов */
     g_bus_spi1.state              = BUS_IDLE;
     g_bus_spi5.state              = BUS_IDLE;
     g_bus_spi4.state              = BUS_IDLE;
@@ -359,21 +379,21 @@ void ICM_BusesInit(void)
     g_bus_spi3.current_sensor_idx = 0U;
     g_bus_spi6.current_sensor_idx = 0U;
 
-    g_bus_spi1.timeout_count      = 0U;   /* [NEW] */
-    g_bus_spi5.timeout_count      = 0U;   /* [NEW] */
-    g_bus_spi4.timeout_count      = 0U;   /* [NEW] */
+    g_bus_spi1.timeout_count      = 0U;
+    g_bus_spi5.timeout_count      = 0U;
+    g_bus_spi4.timeout_count      = 0U;
 
-    g_bus_spi2.timeout_count      = 0U;   /* [NEW] */
-    g_bus_spi3.timeout_count      = 0U;   /* [NEW] */
-    g_bus_spi6.timeout_count      = 0U;   /* [NEW] */
+    g_bus_spi2.timeout_count      = 0U;
+    g_bus_spi3.timeout_count      = 0U;
+    g_bus_spi6.timeout_count      = 0U;
 
-    g_bus_spi1.dma_error_count    = 0U;   /* [NEW] */
-    g_bus_spi5.dma_error_count    = 0U;   /* [NEW] */
-    g_bus_spi4.dma_error_count    = 0U;   /* [NEW] */
+    g_bus_spi1.dma_error_count    = 0U;
+    g_bus_spi5.dma_error_count    = 0U;
+    g_bus_spi4.dma_error_count    = 0U;
 
-    g_bus_spi2.dma_error_count    = 0U;   /* [NEW] */
-    g_bus_spi3.dma_error_count    = 0U;   /* [NEW] */
-    g_bus_spi6.dma_error_count    = 0U;   /* [NEW] */
+    g_bus_spi2.dma_error_count    = 0U;
+    g_bus_spi3.dma_error_count    = 0U;
+    g_bus_spi6.dma_error_count    = 0U;
 
     /* Оставлено для совместимости со старым кодом отладки/телеметрии.
      * Новой acquisition-логикой уже не читается как источник истины. */
@@ -394,7 +414,7 @@ void ICM_BusesInit(void)
     g_bus_spi6.eot_handled        = 0U;
 
 
-    g_icm_events        = 0U;   /* [NEW] */
+    g_icm_events        = 0U;
     g_fifo_batch_ready  = 0U;
     g_dma_cycle_active  = 0U;
     g_sensor_fault_mask = 0U;
@@ -403,7 +423,7 @@ void ICM_BusesInit(void)
     g_clk_ok_mask       = 0U;
     g_clk_fail_mask     = 0U;
 
-    memset(&g_icm_profile, 0, sizeof(g_icm_profile));  /* [NEW] */
+    memset(&g_icm_profile, 0, sizeof(g_icm_profile));
 }
 
 void ICM_WriteReg(ICM_Sensor_t *sensor, uint8_t reg, uint8_t value)
@@ -610,7 +630,7 @@ uint64_t ICM_InitAllSensors(void)
              * в даташите — Big Endian. Устанавливаем первым после сброса,
              * до любых других настроек.
              *
-             * [FIX-3] Используем ICM_WriteIRegBurst — единая CS-транзакция.
+             * Используем ICM_WriteIRegBurst — единая CS-транзакция.
              * ------------------------------------------------------------------ */
             ICM_WriteIRegBurst(sensor, 0xA2U, 0x67U, 0x02U);
 
@@ -637,17 +657,16 @@ uint64_t ICM_InitAllSensors(void)
             ICM_WriteReg(sensor, ICM45686_REG_IOC_PAD_SCENARIO_OVRD, reg_val);
 
             /* ------------------------------------------------------------------
-             * ШАГ 5.5 [FIX-5]: RTC_CONFIG (0x26)
+             * ШАГ 5.5: RTC_CONFIG (0x26)
              * rtc_align (bit6) = 1 — выравнивание первого пакета по CLKIN
              * rtc_mode  (bit5) = 1 — включаем RTC/CLKIN режим
-             * Ранее шаг был описан в комментарии "9б", но не реализован.
              * ------------------------------------------------------------------ */
             ICM_WriteReg(sensor, ICM45686_REG_RTC_CONFIG,
                          ICM45686_RTC_ALIGN_EN | ICM45686_RTC_MODE_EN);
 
             /* ------------------------------------------------------------------
              * ШАГ 6: I3C STC mode off (IREG 0xA268, bit2 = 0)
-             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ICM_WriteIRegBurst для записи
              * ------------------------------------------------------------------ */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_I3C_STC_CFG_H,
@@ -661,7 +680,7 @@ uint64_t ICM_InitAllSensors(void)
             /* ------------------------------------------------------------------
              * ШАГ 7: Accel source = FIR + interpolation
              * IREG 0xA57B, bits[1:0] = 0b10
-             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ICM_WriteIRegBurst для записи
              * ------------------------------------------------------------------ */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_ACCEL_SRC_CTRL_H,
@@ -675,7 +694,7 @@ uint64_t ICM_InitAllSensors(void)
             /* ------------------------------------------------------------------
              * ШАГ 8: Gyro source = FIR + interpolation
              * IREG 0xA4A6, bits[6:5] = 0b10
-             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ICM_WriteIRegBurst для записи
              * ------------------------------------------------------------------ */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_GYRO_SRC_CTRL_H,
@@ -706,7 +725,7 @@ uint64_t ICM_InitAllSensors(void)
             ICM_DelayUs(500U);
 
             /* ------------------------------------------------------------------
-             * ШАГ 11 [FIX-1]: tmst_en ПОСЛЕ PWR_MGMT0
+             * ШАГ 11: tmst_en ПОСЛЕ PWR_MGMT0
              *
              * SMC_CONTROL_0 (IREG 0xA258):
              *   bit0 (TMST_EN)           = 1 — запускает сам счётчик
@@ -714,7 +733,7 @@ uint64_t ICM_InitAllSensors(void)
              *
              * Счётчик требует активного тактирования от датчиков.
              * До PWR_MGMT0 он не тикает → timestamp = 0 в каждом пакете.
-             * [FIX-3] ICM_WriteIRegBurst для записи
+             * ICM_WriteIRegBurst для записи
              * ------------------------------------------------------------------ */
             reg_val  = ICM_ReadIReg(sensor,
                                     ICM45686_IREG_SMC_CONTROL_0_H,
@@ -730,7 +749,7 @@ uint64_t ICM_InitAllSensors(void)
             ICM_DelayUs(500U);
 
             /* ------------------------------------------------------------------
-             * ШАГ 11.5 [FIX-2]: TMST_WOM_CONFIG (0x23)
+             * ШАГ 11.5: TMST_WOM_CONFIG (0x23)
              *
              * TMST_DELTA_EN (bit3) = 1:
              *   В FIFO пишется DELTA между текущим и предыдущим timestamp.
@@ -758,7 +777,7 @@ uint64_t ICM_InitAllSensors(void)
              *   6. Accel+Gyro+HIRES (без IF_EN)
              *   7. + IF_EN (последним!)
              *
-             * [FIX-4] Убрана дублирующая запись FIFO_CONFIG4 из шага 9.
+             * Убрана дублирующая запись FIFO_CONFIG4 из шага 9.
              * ------------------------------------------------------------------ */
 
             /* 1. Останавливаем FIFO-интерфейс */
@@ -836,9 +855,9 @@ void ICM_StartBurstRead(void)
     first1 = ICM_FindNextHealthy(&g_bus_spi1, 0U);
     first5 = ICM_FindNextHealthy(&g_bus_spi5, 0U);
     first4 = ICM_FindNextHealthy(&g_bus_spi4, 0U);
-    first2 = ICM_FindNextHealthy(&g_bus_spi2, 0U);   /* [NEW] */
-    first3 = ICM_FindNextHealthy(&g_bus_spi3, 0U);   /* [NEW] */
-    first6 = ICM_FindNextHealthy(&g_bus_spi6, 0U);   /* [NEW] */
+    first2 = ICM_FindNextHealthy(&g_bus_spi2, 0U);
+    first3 = ICM_FindNextHealthy(&g_bus_spi3, 0U);
+    first6 = ICM_FindNextHealthy(&g_bus_spi6, 0U);
 
     if (first1 < ICM_SENSORS_PER_BUS) { ICM_StartBusRead(&g_bus_spi1, first1); }
     else { g_bus_spi1.state = BUS_COMPLETE; ICM_FinishBus(&g_bus_spi1); }
@@ -861,11 +880,10 @@ void ICM_StartBurstRead(void)
 
 void ICM_StartBurstRead_SPI1(void) { ICM_StartBurstRead(); }
 
-/* [REWRITE v2] DMA RX Transfer-Complete IRQ теперь маршрутизируется на
- * ICM_OnDmaRxComplete(), а НЕ на старую ICM_NextSensor(), которая могла
- * вызвать ICM_OnSpiEot() напрямую (inline) при уже установленном EOT-флаге,
- * создавая риск двойной обработки. Теперь EOT обрабатывается ИСКЛЮЧИТЕЛЬНО
- * из SPIx_IRQHandler → ICM_SPI_Eot_SPIx() → ICM_OnSpiEot(). */
+/* [REWRITE v3] DMA RX Transfer-Complete IRQ теперь маршрутизируется на
+ * ICM_OnDmaRxComplete(), которая в штатном случае (EOT уже установлен)
+ * САМА завершает сенсор и запускает следующий через ICM_AdvanceSensor(),
+ * не дожидаясь отдельного SPI EOT-прерывания. */
 void ICM_DMA_RxComplete_SPI1(void) { ICM_OnDmaRxComplete(&g_bus_spi1); }
 void ICM_DMA_RxComplete_SPI5(void) { ICM_OnDmaRxComplete(&g_bus_spi5); }
 void ICM_DMA_RxComplete_SPI4(void) { ICM_OnDmaRxComplete(&g_bus_spi4); }
@@ -877,9 +895,9 @@ void ICM_DMA_RxComplete_SPI6(void) { ICM_OnDmaRxComplete(&g_bus_spi6); }
 void ICM_DMA_Error_SPI1(void)
 {
     g_dma_error_mask |= (1UL << 0U);
-    g_bus_spi1.dma_error_count++;      /* [NEW] */
-    g_bus_spi1.state = BUS_ERROR;      /* [NEW] */
-    ICM_RecoverBus(&g_bus_spi1);       /* [REWRITE v2] вместо прямого ICM_NextSensor() */
+    g_bus_spi1.dma_error_count++;
+    g_bus_spi1.state = BUS_ERROR;
+    ICM_RecoverBus(&g_bus_spi1);
 }
 void ICM_DMA_Error_SPI5(void)
 {
@@ -927,9 +945,8 @@ void ICM_SPI_Eot_SPI3(void) { ICM_OnSpiEot(&g_bus_spi3); }
 void ICM_SPI_Eot_SPI6(void) { ICM_OnSpiEot(&g_bus_spi6); }
 
 /* ----------------------------------------------------------------------------
- * ICM_StartBusRead — [REWRITE v2]
- *   - убран runtime memset() RX/TX (единственное изменение TX было —
- *     запись первого байта команды, теперь это делается один раз в Init);
+ * ICM_StartBusRead — без функциональных изменений относительно v2:
+ *   - убран runtime memset() RX/TX;
  *   - адреса/длина берутся из precomputed descriptor вместо вычисления;
  *   - busy-wait на LL_DMA_IsEnabledStream() ограничен таймаутом spin-counter,
  *     при превышении — переход в BUS_ERROR/BUS_RECOVERY вместо deadlock.
@@ -950,7 +967,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     bus->eot_handled         = 0U; /* совместимость */
 
     /* ------------------------------------------------------------------
-     * [NEW] Отключение потока/канала — ветвление DMA vs BDMA.
+     * Отключение потока/канала — ветвление DMA vs BDMA.
      * SPI6 обслуживается BDMA (домен D3), остальные — DMA1/DMA2.
      * ------------------------------------------------------------------ */
     if (bus->is_bdma)
@@ -958,7 +975,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
         LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_rx);
         LL_BDMA_DisableChannel(bus->bdma, bus->dma_stream_tx);
 
-        /* [REWRITE v2] Timeout-bounded wait — аналогично DMA-ветке */
+        /* Timeout-bounded wait — аналогично DMA-ветке */
         spin = 2000U;
         while ((LL_BDMA_IsEnabledChannel(bus->bdma, bus->dma_stream_rx) != 0U) && (spin != 0U)) { spin--; }
         spin = 2000U;
@@ -977,7 +994,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
         LL_DMA_DisableStream(bus->dma, bus->dma_stream_rx);
         LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
 
-        /* [REWRITE v2] Timeout-bounded wait вместо бесконечного busy-wait */
+        /* Timeout-bounded wait вместо бесконечного busy-wait */
         spin = 2000U;
         while ((LL_DMA_IsEnabledStream(bus->dma, bus->dma_stream_rx) != 0U) && (spin != 0U)) { spin--; }
         spin = 2000U;
@@ -994,7 +1011,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
 
     ICM_ClearDmaFlags(bus);   /* уже ветвится по is_bdma внутри — без изменений здесь */
 
-    /* [REWRITE v2] БЕЗ memset — RX полностью перезаписывается DMA/BDMA,
+    /* БЕЗ memset — RX полностью перезаписывается DMA/BDMA,
      * TX-шаблон уже содержит команду FIFO_DATA|READ в байте 0 и 0xFF
      * во всех остальных байтах (сформирован один раз в ICM_BusesInit). */
     if (bus->is_bdma)
@@ -1043,7 +1060,7 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     LL_SPI_SetInternalSSLevel(bus->spi, LL_SPI_SS_LEVEL_HIGH);
 
     /* ------------------------------------------------------------------
-     * [NEW] Включение потока/канала — ветвление DMA vs BDMA.
+     * Включение потока/канала — ветвление DMA vs BDMA.
      * ------------------------------------------------------------------ */
     if (bus->is_bdma)
     {
@@ -1063,21 +1080,79 @@ static void ICM_StartBusRead(ICM_Bus_t *bus, uint8_t idx)
     __DSB();
     LL_SPI_StartMasterTransfer(bus->spi);
 
-    bus->dma_start_cyc = DWT->CYCCNT;   /* [NEW] метка времени для watchdog */
+    bus->dma_start_cyc = DWT->CYCCNT;   /* метка времени для watchdog */
     bus->state          = BUS_DMA_ACTIVE;
 }
 
 /* ----------------------------------------------------------------------------
- * ICM_OnDmaRxComplete — [REWRITE v2] заменяет ICM_NextSensor().
+ * ICM_AdvanceSensor — [NEW v3] общий код "закрыть текущий сенсор и запустить
+ * следующий", идентичен тому, что раньше делала ТОЛЬКО ICM_OnSpiEot().
+ * Вызывается из ДВУХ мест:
+ *   1) fast-path — напрямую из ICM_OnDmaRxComplete(), когда EOT уже установлен
+ *      (штатный, подавляющее большинство случаев);
+ *   2) fallback-path — из ICM_OnSpiEot(), когда EOT ещё не был готов на
+ *      момент DMA RX TC (редкий edge-case, например наводки/джиттер).
  *
- * КЛЮЧЕВОЕ ОТЛИЧИЕ ОТ ОРИГИНАЛА: эта функция НИКОГДА не вызывает
- * ICM_OnSpiEot() напрямую. Раньше ICM_NextSensor() делала:
- *     if (LL_SPI_IsActiveFlag_EOT(bus->spi) != 0U) ICM_OnSpiEot(bus);
- * что создавало inline-путь обработки EOT в дополнение к IRQ-пути,
- * то есть риск двойной обработки одного и того же события. Теперь
- * функция только переводит FSM в BUS_WAIT_EOT и включает EOT IRQ —
- * если EOT физически уже установлен, NVIC доставит SPIx IRQ отдельно
- * и ровно один раз сразу после выхода из этого хендлера.
+ * Предполагается, что SPI EOT-флаг УЖЕ очищен вызывающей стороной перед
+ * входом сюда — сама функция этим не занимается, чтобы не дублировать
+ * очистку в fast-path (где регистр уже прочитан и очищен один раз).
+ * -------------------------------------------------------------------------- */
+static void ICM_AdvanceSensor(ICM_Bus_t *bus)
+{
+    uint8_t prev_idx;
+    uint8_t next_idx;
+
+    prev_idx = bus->current_sensor_idx;
+    if (prev_idx >= ICM_SENSORS_PER_BUS) { bus->state = BUS_COMPLETE; ICM_FinishBus(bus); return; }
+
+    ICM_CS_High(&bus->sensors[prev_idx]);
+
+    /* [FIX] Успешное завершение чтения сбрасывает fault_count.
+     * Раньше fault_count накапливался КУМУЛЯТИВНО за всё время жизни
+     * прошивки и никогда не уменьшался на успехе — единственный сброс
+     * происходил в ICM_ServiceReintegration() и только ПОСЛЕ полной
+     * изоляции датчика (fault=1) по истечении reint_countdown. Это
+     * означало, что редкие транзиентные глитчи (один сбой раз в
+     * несколько минут) со временем всё равно накапливались до порога
+     * ICM_SENSOR_MAX_FAULTS_LOCAL и ошибочно изолировали физически
+     * исправный датчик, вместо того чтобы считать только N ошибок
+     * ПОДРЯД. Теперь любой успешный ICM_AdvanceSensor() обнуляет
+     * счётчик, восстанавливая исходный смысл "N сбоев подряд". */
+    bus->sensors[prev_idx].fault_count = 0U;
+
+    LL_SPI_Disable(bus->spi);
+    __DSB();
+
+    bus->state = BUS_NEXT_SENSOR;
+
+    next_idx = ICM_FindNextHealthy(bus, (uint8_t)(prev_idx + 1U));
+    if (next_idx < ICM_SENSORS_PER_BUS)
+    {
+        ICM_StartBusRead(bus, next_idx);
+    }
+    else
+    {
+        bus->state = BUS_COMPLETE;
+        ICM_FinishBus(bus);
+    }
+}
+
+/* ----------------------------------------------------------------------------
+ * ICM_OnDmaRxComplete — [REWRITE v3]
+ *
+ * FAST-PATH (штатный, почти всегда срабатывает):
+ *   К моменту DMA RX Transfer-Complete SPI EOT практически всегда уже
+ *   физически установлен — SPI заканчивает клокирование последнего байта
+ *   одновременно с или раньше завершения DMA-копирования этого байта в
+ *   память. В этом случае мы читаем и чистим EOT здесь же и вызываем
+ *   ICM_AdvanceSensor() СРАЗУ, экономя один полный IRQ (SPIx_IRQHandler)
+ *   на каждый сенсор.
+ *
+ * FALLBACK-PATH (редкий edge-case):
+ *   Если EOT ещё не установлен — переходим в BUS_WAIT_EOT и включаем
+ *   LL_SPI_EnableIT_EOT() как раньше. SPIx_IRQHandler отработает как
+ *   и в старой архитектуре, разница только в том, что теперь это
+ *   исключение, а не правило.
  * -------------------------------------------------------------------------- */
 static void ICM_OnDmaRxComplete(ICM_Bus_t *bus)
 {
@@ -1105,20 +1180,35 @@ static void ICM_OnDmaRxComplete(ICM_Bus_t *bus)
         LL_DMA_DisableStream(bus->dma, bus->dma_stream_tx);
     }
 
+    /* [NEW v3] FAST-PATH: EOT уже установлен — завершаем сенсор здесь же,
+     * без включения SPI EOT IRQ вообще. */
+    if (LL_SPI_IsActiveFlag_EOT(bus->spi) != 0U)
+    {
+        LL_SPI_ClearFlag_EOT(bus->spi);
+        LL_SPI_ClearFlag_TXTF(bus->spi);
+        WRITE_REG(bus->spi->IFCR, 0x0FF8U);
+
+        ICM_AdvanceSensor(bus);
+        return;
+    }
+
+    /* FALLBACK-PATH: EOT ещё не готов — ждём его через SPI IRQ, как раньше. */
     bus->state = BUS_WAIT_EOT;
     LL_SPI_EnableIT_EOT(bus->spi);
-    /* NO direct call to ICM_OnSpiEot() here — architecturally forbidden. */
 }
 
+/* ----------------------------------------------------------------------------
+ * ICM_OnSpiEot — [REWRITE v3] теперь только fallback-путь.
+ * Вызывается редко — только когда ICM_OnDmaRxComplete() не застал EOT
+ * готовым и явно включил LL_SPI_EnableIT_EOT(). Логика идентична
+ * прежней ICM_OnSpiEot() из v2, но сам переход к следующему сенсору
+ * делегирован в общий ICM_AdvanceSensor().
+ * -------------------------------------------------------------------------- */
 static void ICM_OnSpiEot(ICM_Bus_t *bus)
 {
-    uint8_t prev_idx;
-    uint8_t next_idx;
-
     if (LL_SPI_IsActiveFlag_EOT(bus->spi) == 0U) { return; }
 
-    /* [REWRITE v2] Защита от EOT не в ожидаемой фазе — раньше эту роль
-     * играл eot_handled, теперь состояние FSM само служит защитой. */
+    /* Защита от EOT не в ожидаемой фазе */
     if (bus->state != BUS_WAIT_EOT)
     {
         LL_SPI_DisableIT_EOT(bus->spi);
@@ -1132,25 +1222,7 @@ static void ICM_OnSpiEot(ICM_Bus_t *bus)
     LL_SPI_ClearFlag_TXTF(bus->spi);
     WRITE_REG(bus->spi->IFCR, 0x0FF8U);
 
-    prev_idx = bus->current_sensor_idx;
-    if (prev_idx >= ICM_SENSORS_PER_BUS) { bus->state = BUS_COMPLETE; ICM_FinishBus(bus); return; }
-
-    ICM_CS_High(&bus->sensors[prev_idx]);
-    LL_SPI_Disable(bus->spi);
-    __DSB();
-
-    bus->state = BUS_NEXT_SENSOR;
-
-    next_idx = ICM_FindNextHealthy(bus, (uint8_t)(prev_idx + 1U));
-    if (next_idx < ICM_SENSORS_PER_BUS)
-    {
-        ICM_StartBusRead(bus, next_idx);
-    }
-    else
-    {
-        bus->state = BUS_COMPLETE;
-        ICM_FinishBus(bus);
-    }
+    ICM_AdvanceSensor(bus);
 }
 
 static void ICM_FinishBus(ICM_Bus_t *bus)
@@ -1159,7 +1231,7 @@ static void ICM_FinishBus(ICM_Bus_t *bus)
     ICM_TryCompleteBatch();
 }
 
-/* [REWRITE v2] Состояние батча теперь определяется через bus->state,
+/* Состояние батча определяется через bus->state,
  * событие BATCH_READY выставляется атомарно через ICM_SetEvent(). */
 static void ICM_TryCompleteBatch(void)
 {
@@ -1192,7 +1264,7 @@ static void ICM_MarkFault(ICM_Sensor_t *s)
 }
 
 /* ----------------------------------------------------------------------------
- * [NEW] ICM_RecoverBus — переводит шину в контролируемое восстановление
+ * ICM_RecoverBus — переводит шину в контролируемое восстановление
  * вместо бесконечного зависания при DMA/SPI fault. Если конкретный
  * датчик накопил слишком много ошибок подряд — изолирует его на
  * ICM_REINTEGRATION_CYCLES_LOCAL тиков watchdog'а и продолжает burst
@@ -1255,13 +1327,10 @@ static void ICM_RecoverBus(ICM_Bus_t *bus)
 }
 
 /* ----------------------------------------------------------------------------
- * [NEW] ICM_BusTimedOut / ICM_ServiceReintegration / ICM_WatchdogTick
+ * ICM_BusTimedOut / ICM_ServiceReintegration / ICM_WatchdogTick
  *
- * Раньше в проекте отсутствовал системный watchdog: застрявший DMA/SPI
- * приводил к постоянному deadlock до ручного сброса MCU. Теперь
- * ICM_WatchdogTick() нужно вызывать из main loop (или отдельного
- * низкоприоритетного TIM7 IRQ) с частотой заметно выше 100 Гц —
- * рекомендуется ~1 кГц — чтобы обнаруживать stuck DMA/EOT задолго
+ * ICM_WatchdogTick() нужно вызывать из TIM7 IRQ с частотой заметно выше
+ * 100 Гц — рекомендуется ~1 кГц — чтобы обнаруживать stuck DMA/EOT задолго
  * до следующего TIM6 burst.
  * -------------------------------------------------------------------------- */
 static uint8_t ICM_BusTimedOut(const ICM_Bus_t *bus)
@@ -1319,7 +1388,7 @@ void ICM_WatchdogTick(void)
 }
 
 /* ----------------------------------------------------------------------------
- * [NEW] Атомарный event bitmap: ICM_SetEvent (из ISR) / ICM_ConsumeEvents
+ * Атомарный event bitmap: ICM_SetEvent (из ISR) / ICM_ConsumeEvents
  * (из main loop) через LDREX/STREX exclusive access. Это устраняет race
  * condition, при которой два независимых volatile-флага
  * (g_fifo_batch_ready, g_dma_cycle_active) могли наблюдаться main loop
@@ -1430,7 +1499,7 @@ static void ICM_ClearDmaFlags(const ICM_Bus_t *bus)
 }
 
 /* ----------------------------------------------------------------------------
- * [REWRITE v2] ICM_SPI_EnsureDisabled — ограниченный timeout вместо
+ * ICM_SPI_EnsureDisabled — ограниченный timeout вместо
  * бесконечного while(). Используется и в hot path, и в register R/W;
  * при стакнутом SPI (например аппаратный clock-stretching сбой) функция
  * гарантированно возвращает управление, а не блокирует систему навечно.
@@ -1469,7 +1538,7 @@ static void ICM_SPI_DrainRx(SPI_TypeDef *spi, uint32_t n)
 }
 
 /* ----------------------------------------------------------------------------
- * [REWRITE v2] ICM_DelayUs/ICM_DelayMs — DWT cycle counter вместо NOP-loop.
+ * ICM_DelayUs/ICM_DelayMs — DWT cycle counter вместо NOP-loop.
  *
  * ПОЧЕМУ: старая реализация "while (cycles > 3) { __NOP(); cycles -= 3; }"
  * предполагает ровно 3 такта на итерацию цикла — это верно только для
