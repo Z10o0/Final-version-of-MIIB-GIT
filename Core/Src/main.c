@@ -121,15 +121,15 @@ int main(void)
   //LL_GPIO_ResetOutputPin(GPIOG, LL_GPIO_PIN_5); // Выключение внешнего генератора!
 
   MX_DMA_Init();
-  MX_BDMA_Init();   /* [NEW] обязательно — раньше была не нужна */
+  MX_BDMA_Init();
 
   MX_SPI1_Init();
   MX_SPI5_Init();
   MX_SPI4_Init();
 
-  MX_SPI2_Init();   /* [NEW] раскомментировать */
-  MX_SPI3_Init();   /* [NEW] раскомментировать */
-  MX_SPI6_Init();   /* [NEW] раскомментировать */
+  MX_SPI2_Init();
+  MX_SPI3_Init();
+  MX_SPI6_Init();
 
   MX_TIM6_Init();
   MX_TIM7_Init();

@@ -194,12 +194,12 @@ ICM_Bus_t g_bus_spi3 =
     .eot_handled   = 0U,
     .sensors =
     {
-        { SPI3, GPIOD, LL_GPIO_PIN_0, 18U, 0U },
-        { SPI3, GPIOD, LL_GPIO_PIN_1, 19U, 0U },
-        { SPI3, GPIOD, LL_GPIO_PIN_6, 20U, 0U },
-        { SPI3, GPIOD, LL_GPIO_PIN_7, 21U, 0U },
-        { SPI3, GPIOB, LL_GPIO_PIN_8, 22U, 0U },
-        { SPI3, GPIOE, LL_GPIO_PIN_0, 23U, 0U }
+    		{ SPI3, GPIOD, LL_GPIO_PIN_0, 24U, 0U },
+    		{ SPI3, GPIOD, LL_GPIO_PIN_1, 25U, 0U },
+    		{ SPI3, GPIOD, LL_GPIO_PIN_6, 26U, 0U },
+    		{ SPI3, GPIOD, LL_GPIO_PIN_7, 27U, 0U },
+    		{ SPI3, GPIOB, LL_GPIO_PIN_8, 28U, 0U },
+    		{ SPI3, GPIOE, LL_GPIO_PIN_0, 29U, 0U },
     }
 };
 
@@ -216,12 +216,12 @@ ICM_Bus_t g_bus_spi2 =
     .eot_handled   = 0U,
     .sensors =
     {
-        { SPI2, GPIOA, LL_GPIO_PIN_9,  24U, 0U },
-        { SPI2, GPIOA, LL_GPIO_PIN_10, 25U, 0U },
-        { SPI2, GPIOD, LL_GPIO_PIN_4,  26U, 0U },
-        { SPI2, GPIOD, LL_GPIO_PIN_5,  27U, 0U },
-        { SPI2, GPIOB, LL_GPIO_PIN_3,  28U, 0U },
-        { SPI2, GPIOB, LL_GPIO_PIN_4,  29U, 0U }
+    		{ SPI2, GPIOA, LL_GPIO_PIN_9,  18U, 0U },
+    		{ SPI2, GPIOA, LL_GPIO_PIN_10, 19U, 0U },
+    		{ SPI2, GPIOD, LL_GPIO_PIN_4,  20U, 0U },
+    		{ SPI2, GPIOD, LL_GPIO_PIN_5,  21U, 0U },
+    		{ SPI2, GPIOB, LL_GPIO_PIN_3,  22U, 0U },
+    		{ SPI2, GPIOB, LL_GPIO_PIN_4,  23U, 0U },
     }
 };
 
@@ -621,7 +621,9 @@ uint64_t ICM_InitAllSensors(void)
             } while (((reg_val & ICM45686_INT1_STATUS0_RESET_DONE) == 0U) &&
                      (timeout != 0U));
 
-            if (timeout == 0U) { ICM_MarkFault(sensor); continue; }
+            if (timeout == 0U)
+            { ICM_MarkFault(sensor);
+            continue; }
 
             /* ------------------------------------------------------------------
              * ШАГ 3.5: Big Endian — SREGDATAENDIANSEL=1 (IREG 0xA267, bit1)

@@ -196,7 +196,7 @@ void ICM_ParseAllFIFO(void)
             id = (uint8_t)(b * ICM_SENSORS_PER_BUS + s);
             g_sensor_batches[id].sensor_id = id;
 
-            if ((g_sensor_fault_mask & (1UL << id)) != 0U)
+            if ((g_sensor_fault_mask & (1ULL << id)) != 0U)
             {
                 memset(g_sensor_batches[id].samples, 0x00,
                        sizeof(g_sensor_batches[id].samples));
