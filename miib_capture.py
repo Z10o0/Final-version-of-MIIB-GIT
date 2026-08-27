@@ -1048,12 +1048,12 @@ if __name__ == "__main__":
         MODE = "capture"        # "capture" или "parse"
 
         # -- НАСТРОЙКИ ЗАХВАТА --------------------------------------
-        PORT         = "COM11"
+        PORT         = "COM3"
         BAUD         = 12_000_000
         DURATION     = 30.0
         OUTFILE      = ""
         CHUNK        = 1_048_576     # [NEW v6] 1 МБ вместо 65536
-        READ_TIMEOUT = 0.002         # [NEW v6] 2 мс вместо 20 мс
+        READ_TIMEOUT = 0.001         # [NEW v6] 2 мс вместо 20 мс
         QUEUE_MAX    = 20000         # [NEW v6] запас на случай крупных чанков
         NO_PARSE     = False
         NO_PLOTS     = False
