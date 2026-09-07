@@ -192,7 +192,7 @@ if __name__ == '__main__':
     print('===========================================================================\n')
 
     # ===================== 4. СЕТКА TAU =====================
-    max_cluster = int(np.floor(n_samples / 9))          # IEEE 952: отсечение правого хвоста
+    max_cluster = int(np.floor(n_samples / 2))          # IEEE 952: отсечение правого хвоста
     n_decades   = np.log10(max_cluster)
     n_tau_points = int(round(n_decades * PTS_PER_DECADE))
 

@@ -1,9 +1,9 @@
 %% ===================== НАСТРОЙКИ СКРИПТА =====================
 clear; clc; close all;
 
-binFilePath      = 'miib_raw_20260831_174217.bin';
-outputH5Path     = 'miib_data_single_12h.h5';
-chunkMb          = 150;                             % Размер порции чтения в ОЗУ (МБ)
+binFilePath      = 'miib_raw_20260831_142519.bin';
+outputH5Path     = 'miib_data_calib_temp_2h.h5';
+chunkMb          = 500;                             % Размер порции чтения в ОЗУ (МБ)
 
 %% ===================== ПОДГОТОВКА ФАЙЛА =====================
 if exist(outputH5Path, 'file')
