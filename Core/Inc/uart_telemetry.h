@@ -1,6 +1,7 @@
 /**
  * @file uart_telemetry.h
- * @brief Телеметрия USART1 (RS-485) через DMA с ring-buffer буферизацией TX-кадров.
+ * @brief Телеметрия USART1 (RS-485) через DMA с ring-buffer
+ *        буферизацией TX-кадров.
  *
  * UART wire-формат, 690 байт:
  *
@@ -8,10 +9,13 @@
  *  --------  ------  -----------------------------------------------
  *  0..1      2       Header: 0xAA 0x55
  *  2..3      2       frame_counter, uint16_t Little Endian
- *  4..689    686     S00..S35: 36 x 19-byte HIRES IMU block
+ *  4..687    684     S00..S35: 36 x 19-byte HIRES IMU block
  *  688..689  2       CRC16-CCITT Little Endian по bytes [2..687]
  *
  *  Полный размер: 2 + 2 + 36 * 19 + 2 = 690 bytes.
+ *  Один кадр содержит один усреднённый output sample 400 Гц от каждого
+ *  из 36 датчиков (среднее 8 raw HIRES-отсчётов при ODR 3200 Гц).
+ *  Wire format и CRC не изменены.
  *
  *  Формат одного 19-byte IMU block:
  *
@@ -29,22 +33,14 @@
  *  temp_raw и timestamp: Big Endian внутри IMU block.
  *  frame_counter и CRC: Little Endian.
  *
- * ------------------------------------------------------------------
- * [ИЗМЕНЕНИЯ v2] Ping-pong заменён на ring-buffer из
- * UART_TX_QUEUE_DEPTH слотов. 36 датчиков (6 SPI × 6).
+ *  timestamp в усреднённом кадре — timestamp последнего из восьми
+ *  raw-пакетов окна (диагностическое поле, не усредняется).
  *
- * Расчёт по времени (баланс) при 8.1 Mbaud:
- *   1 кадр (690 байт): 690*10/8.1e6 ~= 852 мкс.
- *   16 кадров подряд: 16 * 852 мкс ~= 13.6 мс.
- *
- * ВНИМАНИЕ: 13.6 мс > 10 мс (период TIM6 @ 100 Гц).
- * При текущем baudrate 8.1 Mbaud и 36 датчиках UART не успевает
- * выгрести 16 кадров за один период! Требуется либо:
- *   а) baudrate >= 690*10*16*100 = 110.4 Mbit/s (нереально для RS-485)
- *   б) уменьшить ICM_FIFO_POLL_PACKETS до 8 -> 6.8 мс < 10 мс
- *   в) уменьшить UART_TX_QUEUE_DEPTH до запаса по расчёту
- * Документируется здесь для явного контроля разработчиком.
- * ------------------------------------------------------------------
+ * Один TIM6-батч @ 400 Гц -> один усреднённый RS-кадр 690 байт.
+ * USART1 = 12 Mbaud, 8N1.
+ * Время кадра: 690 * 10 / 12e6 = 575 мкс.
+ * Период кадра: 2500 мкс.
+ * Загрузка линии: 23%.
  */
 
 #ifndef UART_TELEMETRY_H
@@ -64,7 +60,7 @@ extern "C" {
 #define UART_PKT_HEADER_0     0xAAU
 #define UART_PKT_HEADER_1     0x55U
 
-#define UART_SENSOR_COUNT     36U          /* 6 шин × 6 датчиков       */
+#define UART_SENSOR_COUNT     36U
 #define UART_IMU_WIRE_BYTES   19U
 #define UART_COUNTER_BYTES    2U
 #define UART_HEADER_BYTES     2U
@@ -72,43 +68,40 @@ extern "C" {
 
 #define UART_PAYLOAD_BYTES \
     (UART_COUNTER_BYTES + UART_SENSOR_COUNT * UART_IMU_WIRE_BYTES)
-/* = 2 + 36*19 = 686 */
 
 #define UART_PKT_TOTAL_BYTES \
     (UART_HEADER_BYTES + UART_PAYLOAD_BYTES + UART_CRC_BYTES)
-/* = 2 + 686 + 2 = 690 */
 
 #define UART_OFFSET_HEADER    0U
 #define UART_OFFSET_COUNTER   2U
 #define UART_OFFSET_SAMPLES   4U
 #define UART_OFFSET_CRC       (UART_HEADER_BYTES + UART_PAYLOAD_BYTES)
-/* = 688U — вычисляется из макросов, не хардкодится */
 
 /*
- * Ring-buffer TX очередь.
- * UART_TX_QUEUE_DEPTH = ICM_FIFO_POLL_PACKETS = 16 слотов.
- * 16 x 690 bytes = 11 040 bytes D2 SRAM.
- *
- * Timing @ 12 Mbaud:
- *   16 кадров × 575 мкс = 9 200 мкс < 10 000 мкс (период TIM6).
- *   Запас: 800 мкс. Overlap не нужен — DMA выгребает батч до
- *   прихода следующего цикла опроса.
- *
- * Итоговый RAM_D2: 13 161 (фикс.) + 11 040 (queue) = 24 201 байт.
+ * Глубина TX-очереди не зависит от размера FIFO-батча: на один батч
+ * формируется ровно один кадр. 8 кадров = 20 мс запаса при 400 Гц.
+ * Активный DMA-слот в глубину очереди входит.
  */
-#define UART_TX_QUEUE_DEPTH   (ICM_FIFO_POLL_PACKETS * 2U)
+#define UART_TX_QUEUE_DEPTH   8U
 
 _Static_assert(UART_PAYLOAD_BYTES == 686U,
                "Unexpected UART payload size: expected 2 + 36*19 = 686");
-
 _Static_assert(UART_PKT_TOTAL_BYTES == 690U,
                "Unexpected UART packet size: expected 690");
+_Static_assert(UART_TX_QUEUE_DEPTH >= 2U,
+               "UART TX queue must contain at least two frames");
+_Static_assert(UART_SENSOR_COUNT == ICM_TOTAL_SENSORS,
+               "UART sensor count must match ICM sensor topology");
 
 /* ================================================================
- * Public API (сигнатуры не изменены)
+ * Public API
  * ================================================================ */
 void UART_Telemetry_Init(void);
+
+/* Один вызов создаёт один усреднённый output frame (400 Гц). */
 void UART_BuildAndSendSyncFrame(void);
+
+/* Вызывать только из DMA1_Stream1_IRQHandler() после очистки TC. */
 void UART_DMA_TxComplete(void);
 
 /* ================================================================
@@ -125,6 +118,12 @@ extern volatile uint8_t  g_uart_queue_count;
 extern volatile uint32_t g_uart_dma_te_count;
 extern volatile uint32_t g_uart_dma_dme_count;
 extern volatile uint32_t g_uart_dma_fe_count;
+
+/* Профилирование построения кадра (DWT) */
+extern volatile uint32_t g_uart_build_cyc_last;
+extern volatile uint32_t g_uart_build_cyc_max;
+extern volatile uint32_t g_uart_build_us_last;
+extern volatile uint32_t g_uart_build_us_max;
 
 #ifdef __cplusplus
 }
