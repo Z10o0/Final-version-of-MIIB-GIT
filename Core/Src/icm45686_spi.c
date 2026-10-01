@@ -73,6 +73,9 @@ static void     ICM_SetEvent           (uint32_t mask);
 #define ICM_REINTEGRATION_CYCLES_LOCAL  500U   /* число watchdog-тиков до повторной попытки reintegration */
 #define ICM_DMA_TIMEOUT_US_LOCAL        600U   /* максимально допустимая длительность burst-транзакции, мкс */
 
+_Static_assert(ICM_FIFO_DMA_BUF_SIZE <= UINT16_MAX,
+               "DMA descriptor length field is too small");
+
 volatile uint32_t g_icm_events = 0U;   /* атомарный event bitmap */
 icm_profile_t      g_icm_profile;       /* DWT-профилирование */
 
@@ -99,6 +102,7 @@ static uint8_t g_tx_spi6[ICM_FIFO_DMA_BUF_SIZE] __attribute__((section(".RAM_D3"
 
 volatile uint8_t  g_fifo_batch_ready  = 0U;
 volatile uint8_t  g_dma_cycle_active  = 0U;
+volatile uint8_t  g_fifo_resync_required = 0U;
 volatile uint64_t g_sensor_fault_mask = 0U;
 volatile uint32_t g_dma_error_mask    = 0U;
 volatile uint32_t g_tim6_skip_count   = 0U;
@@ -417,6 +421,7 @@ void ICM_BusesInit(void)
     g_icm_events        = 0U;
     g_fifo_batch_ready  = 0U;
     g_dma_cycle_active  = 0U;
+    g_fifo_resync_required = 0U;
     g_sensor_fault_mask = 0U;
     g_dma_error_mask    = 0U;
     g_tim6_skip_count   = 0U;
@@ -845,6 +850,7 @@ void ICM_StartBurstRead(void)
     {
         g_tim6_skip_count++;
         g_icm_profile.frame_skip_count++;
+        g_fifo_resync_required = 1U;
         ICM_SetEvent(ICM_EVT_FRAME_SKIP);
         return;
     }
@@ -1278,6 +1284,8 @@ static void ICM_RecoverBus(ICM_Bus_t *bus)
     uint8_t idx = bus->current_sensor_idx;
     uint8_t next_idx;
 
+    g_fifo_resync_required = 1U;
+
     if (idx < ICM_SENSORS_PER_BUS)
     {
         ICM_CS_High(&bus->sensors[idx]);
@@ -1331,9 +1339,9 @@ static void ICM_RecoverBus(ICM_Bus_t *bus)
 /* ----------------------------------------------------------------------------
  * ICM_BusTimedOut / ICM_ServiceReintegration / ICM_WatchdogTick
  *
- * ICM_WatchdogTick() нужно вызывать из TIM7 IRQ с частотой заметно выше
- * 100 Гц — рекомендуется ~1 кГц — чтобы обнаруживать stuck DMA/EOT задолго
- * до следующего TIM6 burst.
+ * ICM_WatchdogTick() вызывается из TIM7 IRQ с частотой 1 кГц.
+ * Output acquisition работает на 400 Гц; watchdog обнаруживает stuck
+ * DMA/EOT до следующего TIM6 burst.
  * -------------------------------------------------------------------------- */
 static uint8_t ICM_BusTimedOut(const ICM_Bus_t *bus)
 {
