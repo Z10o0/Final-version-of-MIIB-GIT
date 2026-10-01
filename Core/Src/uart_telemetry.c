@@ -1,83 +1,81 @@
-/* =============================================================================
- * uart_telemetry.c — USART1 telemetry via DMA1 Stream1, ring-buffer TX queue.
+/*
+ * USART1 telemetry via DMA1 Stream1.
  *
- * Один вызов UART_BuildAndSendSyncFrame() создаёт ровно один 690-байтовый
- * кадр из g_sensor_averaged[] (один усреднённый output sample 400 Гц
- * от каждого из 36 датчиков).
+ * Один вызов UART_BuildAndSendSyncFrame() формирует один
+ * усреднённый output frame.
  *
- * Модель очереди (одиночный producer = main loop, consumer = DMA TC IRQ):
- *   - s_q_count считает кадры, готовые к передаче и ещё НЕ взятые DMA;
- *   - активный (передаваемый сейчас) кадр в s_q_count не входит;
- *   - занятость кольца = s_q_count + (s_dma_active ? 1 : 0);
- *   - producer резервирует tail только если занятость < UART_TX_QUEUE_DEPTH,
- *     поэтому он никогда не пишет в слот, который читает DMA.
+ * Wire format сохранён:
+ *   690 bytes/frame;
+ *   header AA 55;
+ *   uint16 frame counter Little Endian;
+ *   36 IMU blocks x 19 bytes;
+ *   CRC16-CCITT-FALSE Little Endian.
  *
- * Двухфазная модель reserve -> build -> commit: DMA consumer не может
- * увидеть недостроенный кадр, т.к. s_q_count увеличивается только после
- * завершения UART_BuildPacket().
+ * TX queue: .RAM_D1_DMA / AXI SRAM.
  *
- * FE (FIFO error) DMA1 Stream1 не считается ошибкой: DMA FIFO mode для
- * этого стрима отключён, IT_FE не включается.
+ * Cache coherency:
+ *   - если D-cache включён, clean перед каждой DMA-передачей;
+ *   - если D-cache выключен, cache maintenance не вызывается;
+ *   - перед включением DMA выполняется DSB.
  *
- * Буфер g_uart_tx_queue размещён в .RAM_D1_DMA (AXI SRAM). Эта секция не
- * покрыта non-cacheable MPU-регионами, поэтому перед каждым запуском DMA
- * выполняется clean D-cache по диапазону кадра.
- * ============================================================================= */
+ * Producer: main loop.
+ * Consumer: DMA1 Stream1 TC ISR.
+ * Модель reserve/build/commit сохранена.
+ */
 
 #include "uart_telemetry.h"
 #include "icm45686_spi.h"
 #include "main.h"
-#include <string.h>
+
 #include <stdint.h>
+#include <string.h>
 
 #ifndef NDEBUG
 #define UART_Q_ASSERT(cond) \
-    do                      \
-    {                       \
-        if (!(cond))        \
-        {                   \
-            __BKPT(0);      \
-        }                   \
-    } while (0)
+    do { if (!(cond)) { __BKPT(0); } } while (0)
 #else
-#define UART_Q_ASSERT(cond)  do { } while (0)
+#define UART_Q_ASSERT(cond) \
+    do { } while (0)
 #endif
 
-_Static_assert(UART_SENSOR_COUNT == ICM_TOTAL_SENSORS,
-               "UART sensor count must match ICM topology");
-_Static_assert(UART_PKT_TOTAL_BYTES <= 65535U,
-               "UART frame length must fit DMA NDTR field");
-
-/* ================================================================
- * TX ring-buffer: .RAM_D1_DMA / AXI SRAM, выравнивание по cache line.
- * ================================================================ */
-static uint8_t g_uart_tx_queue[UART_TX_QUEUE_DEPTH][UART_PKT_TOTAL_BYTES]
+static uint8_t g_uart_tx_queue
+    [UART_TX_QUEUE_DEPTH]
+    [UART_PKT_TOTAL_BYTES]
     __attribute__((section(".RAM_D1_DMA"), aligned(32)));
 
-static volatile uint8_t s_q_head     = 0U;
-static volatile uint8_t s_q_tail     = 0U;
-static volatile uint8_t s_q_count    = 0U;
+static volatile uint8_t s_q_head = 0U;
+static volatile uint8_t s_q_tail = 0U;
+static volatile uint8_t s_q_count = 0U;
+
 static volatile uint8_t s_dma_active = 0U;
 
 static uint16_t s_frame_counter = 0U;
 
-volatile uint32_t g_uart_drop_count           = 0U;
-volatile uint32_t g_uart_build_count          = 0U;
-volatile uint32_t g_uart_enqueue_count        = 0U;
-volatile uint32_t g_uart_dma_start_count      = 0U;
-volatile uint32_t g_uart_dma_tc_count         = 0U;
-volatile uint8_t  g_uart_queue_high_watermark = 0U;
-volatile uint8_t  g_uart_queue_count          = 0U;
-volatile uint32_t g_uart_dma_te_count         = 0U;
-volatile uint32_t g_uart_dma_dme_count        = 0U;
-volatile uint32_t g_uart_dma_fe_count         = 0U;
+volatile uint32_t g_uart_drop_count = 0U;
+volatile uint32_t g_uart_build_count = 0U;
+volatile uint32_t g_uart_enqueue_count = 0U;
+
+volatile uint32_t g_uart_dma_start_count = 0U;
+volatile uint32_t g_uart_dma_tc_count = 0U;
+
+volatile uint8_t g_uart_queue_high_watermark = 0U;
+volatile uint8_t g_uart_queue_count = 0U;
+
+volatile uint32_t g_uart_dma_te_count = 0U;
+volatile uint32_t g_uart_dma_dme_count = 0U;
+volatile uint32_t g_uart_dma_fe_count = 0U;
 
 volatile uint32_t g_uart_build_cyc_last = 0U;
-volatile uint32_t g_uart_build_cyc_max  = 0U;
-volatile uint32_t g_uart_build_us_last  = 0U;
-volatile uint32_t g_uart_build_us_max   = 0U;
+volatile uint32_t g_uart_build_cyc_max = 0U;
 
-/* CRC16-CCITT: poly 0x1021, init 0xFFFF, no reflect, no xorout. */
+volatile uint32_t g_uart_build_us_last = 0U;
+volatile uint32_t g_uart_build_us_max = 0U;
+
+/*
+ * CRC16-CCITT-FALSE:
+ * poly 0x1021, init 0xFFFF,
+ * no reflect, xorout 0x0000.
+ */
 static const uint16_t g_crc16_ccitt_table[256] =
 {
     0x0000U, 0x1021U, 0x2042U, 0x3063U, 0x4084U, 0x50A5U, 0x60C6U, 0x70E7U,
@@ -121,9 +119,11 @@ static uint16_t CRC16_CCITT(const uint8_t *data, uint32_t len)
 
     for (i = 0U; i < len; i++)
     {
-        uint8_t idx = (uint8_t)(((crc >> 8U) & 0xFFU) ^ data[i]);
+        uint8_t idx = (uint8_t)(
+            ((crc >> 8) & 0xFFU) ^ data[i]);
 
-        crc = (uint16_t)((crc << 8U) ^ g_crc16_ccitt_table[idx]);
+        crc = (uint16_t)(
+            (crc << 8) ^ g_crc16_ccitt_table[idx]);
     }
 
     return crc;
@@ -134,26 +134,33 @@ static inline uint32_t UART_ToU20(int32_t value)
     return ((uint32_t)value) & 0x000FFFFFUL;
 }
 
-static inline void UART_PackIMU19(uint8_t dst[UART_IMU_WIRE_BYTES],
-                                  const ICM_Sample_t *src)
+static inline void UART_PackIMU19(
+    uint8_t dst[UART_IMU_WIRE_BYTES],
+    const ICM_Sample_t *src)
 {
     const uint32_t ax = UART_ToU20(src->accel_x);
     const uint32_t ay = UART_ToU20(src->accel_y);
     const uint32_t az = UART_ToU20(src->accel_z);
+
     const uint32_t gx = UART_ToU20(src->gyro_x);
     const uint32_t gy = UART_ToU20(src->gyro_y);
     const uint32_t gz = UART_ToU20(src->gyro_z);
 
-    dst[0]  = (uint8_t)(ax >> 12U);
-    dst[1]  = (uint8_t)(ax >> 4U);
-    dst[2]  = (uint8_t)(ay >> 12U);
-    dst[3]  = (uint8_t)(ay >> 4U);
-    dst[4]  = (uint8_t)(az >> 12U);
-    dst[5]  = (uint8_t)(az >> 4U);
-    dst[6]  = (uint8_t)(gx >> 12U);
-    dst[7]  = (uint8_t)(gx >> 4U);
-    dst[8]  = (uint8_t)(gy >> 12U);
-    dst[9]  = (uint8_t)(gy >> 4U);
+    dst[0] = (uint8_t)(ax >> 12U);
+    dst[1] = (uint8_t)(ax >> 4U);
+
+    dst[2] = (uint8_t)(ay >> 12U);
+    dst[3] = (uint8_t)(ay >> 4U);
+
+    dst[4] = (uint8_t)(az >> 12U);
+    dst[5] = (uint8_t)(az >> 4U);
+
+    dst[6] = (uint8_t)(gx >> 12U);
+    dst[7] = (uint8_t)(gx >> 4U);
+
+    dst[8] = (uint8_t)(gy >> 12U);
+    dst[9] = (uint8_t)(gy >> 4U);
+
     dst[10] = (uint8_t)(gz >> 12U);
     dst[11] = (uint8_t)(gz >> 4U);
 
@@ -163,60 +170,110 @@ static inline void UART_PackIMU19(uint8_t dst[UART_IMU_WIRE_BYTES],
     dst[14] = (uint8_t)(src->timestamp >> 8U);
     dst[15] = (uint8_t)(src->timestamp & 0xFFU);
 
-    dst[16] = (uint8_t)(((ax & 0x0FU) << 4U) | (gx & 0x0FU));
-    dst[17] = (uint8_t)(((ay & 0x0FU) << 4U) | (gy & 0x0FU));
-    dst[18] = (uint8_t)(((az & 0x0FU) << 4U) | (gz & 0x0FU));
+    dst[16] = (uint8_t)(
+        ((ax & 0x0FU) << 4U) | (gx & 0x0FU));
+
+    dst[17] = (uint8_t)(
+        ((ay & 0x0FU) << 4U) | (gy & 0x0FU));
+
+    dst[18] = (uint8_t)(
+        ((az & 0x0FU) << 4U) | (gz & 0x0FU));
 }
 
-/* Строит один кадр из g_sensor_averaged[]. */
 static void UART_BuildPacket(uint8_t pkt[UART_PKT_TOTAL_BYTES])
 {
-    uint8_t  id;
+    uint8_t id;
     uint32_t imu_off;
     uint16_t crc;
 
-    pkt[UART_OFFSET_HEADER]       = UART_PKT_HEADER_0;
-    pkt[UART_OFFSET_HEADER + 1U]  = UART_PKT_HEADER_1;
-    pkt[UART_OFFSET_COUNTER]      = (uint8_t)(s_frame_counter & 0xFFU);
-    pkt[UART_OFFSET_COUNTER + 1U] = (uint8_t)(s_frame_counter >> 8U);
+    pkt[UART_OFFSET_HEADER] = UART_PKT_HEADER_0;
+    pkt[UART_OFFSET_HEADER + 1U] = UART_PKT_HEADER_1;
 
-    memset(&pkt[UART_OFFSET_SAMPLES],
-           0x00,
-           (size_t)UART_SENSOR_COUNT * (size_t)UART_IMU_WIRE_BYTES);
+    pkt[UART_OFFSET_COUNTER] =
+        (uint8_t)(s_frame_counter & 0xFFU);
+
+    pkt[UART_OFFSET_COUNTER + 1U] =
+        (uint8_t)(s_frame_counter >> 8U);
+
+    memset(
+        &pkt[UART_OFFSET_SAMPLES],
+        0x00,
+        (size_t)UART_SENSOR_COUNT * (size_t)UART_IMU_WIRE_BYTES);
 
     for (id = 0U; id < (uint8_t)UART_SENSOR_COUNT; id++)
     {
         if ((g_sensor_average_status[id] == ICM_AVG_STATUS_OK) &&
             ((g_sensor_fault_mask & (1ULL << id)) == 0U))
         {
-            imu_off = UART_OFFSET_SAMPLES +
-                      ((uint32_t)id * (uint32_t)UART_IMU_WIRE_BYTES);
+            imu_off = UART_OFFSET_SAMPLES
+                + ((uint32_t)id * (uint32_t)UART_IMU_WIRE_BYTES);
 
-            UART_PackIMU19(&pkt[imu_off], &g_sensor_averaged[id]);
+            UART_PackIMU19(
+                &pkt[imu_off],
+                &g_sensor_averaged[id]);
         }
     }
 
     s_frame_counter = (uint16_t)(s_frame_counter + 1U);
 
-    crc = CRC16_CCITT(&pkt[UART_OFFSET_COUNTER], UART_PAYLOAD_BYTES);
+    crc = CRC16_CCITT(
+        &pkt[UART_OFFSET_COUNTER],
+        UART_PAYLOAD_BYTES);
 
-    pkt[UART_OFFSET_CRC]      = (uint8_t)(crc & 0xFFU);
+    pkt[UART_OFFSET_CRC] = (uint8_t)(crc & 0xFFU);
     pkt[UART_OFFSET_CRC + 1U] = (uint8_t)(crc >> 8U);
 }
 
-/* Clean D-cache по диапазону кадра, выровненному по 32-байтовым cache lines. */
+/*
+ * Очистка D-cache только при его фактическом включении.
+ *
+ * __DCACHE_PRESENT означает наличие кэша в ядре,
+ * но не означает, что он включён.
+ *
+ * Фактическое состояние: SCB->CCR, бит DC.
+ *
+ * При включённом D-cache диапазон округляется до
+ * границ 32-байтовых cache lines.
+ *
+ * При выключенном D-cache maintenance не выполняется.
+ * DSB сохраняется перед запуском DMA.
+ *
+ * Предполагается, что состояние кэша не переключается
+ * конкурентно во время передачи.
+ */
 static void UART_CleanTxDCache(const void *addr, uint32_t len)
 {
-    uintptr_t start = (uintptr_t)addr & ~(uintptr_t)31U;
-    uintptr_t end   = ((uintptr_t)addr + len + 31U) & ~(uintptr_t)31U;
+    if (len == 0U)
+    {
+        return;
+    }
 
-    SCB_CleanDCache_by_Addr((uint32_t *)start, (int32_t)(end - start));
+#if defined(__DCACHE_PRESENT) && (__DCACHE_PRESENT == 1U)
+    if ((SCB->CCR & SCB_CCR_DC_Msk) != 0U)
+    {
+        const uintptr_t start =
+            (uintptr_t)addr & ~(uintptr_t)31U;
+
+        const uintptr_t end =
+            ((uintptr_t)addr + (uintptr_t)len + 31U)
+            & ~(uintptr_t)31U;
+
+        SCB_CleanDCache_by_Addr(
+            (uint32_t *)start,
+            (int32_t)(end - start));
+    }
+#endif
+
     __DSB();
 }
 
-/* ================================================================
- * Полный запуск DMA — когда поток мог быть в неопределённом состоянии.
- * ================================================================ */
+/*
+ * Полный запуск DMA при простое.
+ *
+ * Вызывается producer'ом в критической секции.
+ * s_dma_active и счётчик сохраняют прежнюю семантику:
+ * обновляются перед аппаратным включением stream.
+ */
 static void UART_StartDMAFromBuffer(uint8_t buf_idx)
 {
     LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_1);
@@ -230,28 +287,37 @@ static void UART_StartDMAFromBuffer(uint8_t buf_idx)
     LL_DMA_ClearFlag_DME1(DMA1);
     LL_DMA_ClearFlag_FE1(DMA1);
 
-    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_STREAM_1,
-                            (uint32_t)&g_uart_tx_queue[buf_idx][0]);
+    LL_DMA_SetMemoryAddress(
+        DMA1,
+        LL_DMA_STREAM_1,
+        (uint32_t)&g_uart_tx_queue[buf_idx][0]);
 
-    LL_DMA_SetPeriphAddress(DMA1, LL_DMA_STREAM_1,
-                            LL_USART_DMA_GetRegAddr(
-                                USART1, LL_USART_DMA_REG_DATA_TRANSMIT));
+    LL_DMA_SetPeriphAddress(
+        DMA1,
+        LL_DMA_STREAM_1,
+        LL_USART_DMA_GetRegAddr(
+            USART1,
+            LL_USART_DMA_REG_DATA_TRANSMIT));
 
-    LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_1,
-                         (uint32_t)UART_PKT_TOTAL_BYTES);
-
-    UART_CleanTxDCache(g_uart_tx_queue[buf_idx], UART_PKT_TOTAL_BYTES);
+    LL_DMA_SetDataLength(
+        DMA1,
+        LL_DMA_STREAM_1,
+        (uint32_t)UART_PKT_TOTAL_BYTES);
 
     s_dma_active = 1U;
     g_uart_dma_start_count++;
 
+    UART_CleanTxDCache(
+        g_uart_tx_queue[buf_idx],
+        UART_PKT_TOTAL_BYTES);
+
     LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_1);
 }
 
-/* ================================================================
- * Быстрый restart — только из UART_DMA_TxComplete().
- * После TC Normal-mode поток уже аппаратно остановлен.
- * ================================================================ */
+/*
+ * Быстрый restart после DMA TC.
+ * В normal mode stream уже остановлен аппаратно.
+ */
 static void UART_StartDMAFromBuffer_Fast(uint8_t buf_idx)
 {
     LL_DMA_ClearFlag_TC1(DMA1);
@@ -259,23 +325,29 @@ static void UART_StartDMAFromBuffer_Fast(uint8_t buf_idx)
     LL_DMA_ClearFlag_DME1(DMA1);
     LL_DMA_ClearFlag_FE1(DMA1);
 
-    LL_DMA_SetMemoryAddress(DMA1, LL_DMA_STREAM_1,
-                            (uint32_t)&g_uart_tx_queue[buf_idx][0]);
+    LL_DMA_SetMemoryAddress(
+        DMA1,
+        LL_DMA_STREAM_1,
+        (uint32_t)&g_uart_tx_queue[buf_idx][0]);
 
-    LL_DMA_SetDataLength(DMA1, LL_DMA_STREAM_1,
-                         (uint32_t)UART_PKT_TOTAL_BYTES);
-
-    UART_CleanTxDCache(g_uart_tx_queue[buf_idx], UART_PKT_TOTAL_BYTES);
+    LL_DMA_SetDataLength(
+        DMA1,
+        LL_DMA_STREAM_1,
+        (uint32_t)UART_PKT_TOTAL_BYTES);
 
     s_dma_active = 1U;
     g_uart_dma_start_count++;
+
+    UART_CleanTxDCache(
+        g_uart_tx_queue[buf_idx],
+        UART_PKT_TOTAL_BYTES);
 
     LL_DMA_EnableStream(DMA1, LL_DMA_STREAM_1);
 }
 
 void UART_Telemetry_Init(void)
 {
-    uint8_t  i;
+    uint8_t i;
     uint16_t j;
 
     LL_DMA_DisableStream(DMA1, LL_DMA_STREAM_1);
@@ -289,94 +361,113 @@ void UART_Telemetry_Init(void)
     LL_DMA_ClearFlag_DME1(DMA1);
     LL_DMA_ClearFlag_FE1(DMA1);
 
-    /* IT_FE не включается: FIFO mode этого стрима отключён. */
     LL_DMA_EnableIT_TC(DMA1, LL_DMA_STREAM_1);
     LL_DMA_EnableIT_TE(DMA1, LL_DMA_STREAM_1);
     LL_DMA_EnableIT_DME(DMA1, LL_DMA_STREAM_1);
 
+    /*
+     * IT_FE не включается:
+     * текущий stream использует Direct mode.
+     */
     LL_USART_EnableDMAReq_TX(USART1);
 
-    s_q_head        = 0U;
-    s_q_tail        = 0U;
-    s_q_count       = 0U;
-    s_dma_active    = 0U;
+    s_q_head = 0U;
+    s_q_tail = 0U;
+    s_q_count = 0U;
+    s_dma_active = 0U;
+
     s_frame_counter = 0U;
 
-    g_uart_drop_count           = 0U;
-    g_uart_build_count          = 0U;
-    g_uart_enqueue_count        = 0U;
-    g_uart_dma_start_count      = 0U;
-    g_uart_dma_tc_count         = 0U;
-    g_uart_queue_high_watermark = 0U;
-    g_uart_queue_count          = 0U;
-    g_uart_dma_te_count         = 0U;
-    g_uart_dma_dme_count        = 0U;
-    g_uart_dma_fe_count         = 0U;
+    g_uart_drop_count = 0U;
+    g_uart_build_count = 0U;
+    g_uart_enqueue_count = 0U;
 
-    for (i = 0U; i < (uint8_t)UART_TX_QUEUE_DEPTH; i++)
+    g_uart_dma_start_count = 0U;
+    g_uart_dma_tc_count = 0U;
+
+    g_uart_queue_high_watermark = 0U;
+    g_uart_queue_count = 0U;
+
+    g_uart_dma_te_count = 0U;
+    g_uart_dma_dme_count = 0U;
+    g_uart_dma_fe_count = 0U;
+
+    for (i = 0U; i < UART_TX_QUEUE_DEPTH; i++)
     {
-        for (j = 0U; j < (uint16_t)UART_PKT_TOTAL_BYTES; j++)
+        for (j = 0U; j < UART_PKT_TOTAL_BYTES; j++)
         {
             g_uart_tx_queue[i][j] = 0U;
         }
     }
 }
 
-/* ================================================================
- * Producer — один вызов создаёт один output frame.
+/*
+ * Один вызов = один output frame.
  *
- *  1. Под критической секцией проверить занятость кольца с учётом
- *     активного DMA-слота и зарезервировать tail.
- *  2. Построить кадр вне критической секции.
- *  3. Под критической секцией закоммитить кадр и при необходимости
- *     запустить DMA.
- * ================================================================ */
+ * Reserve одного слота.
+ * Build вне критической секции.
+ * Commit делает готовый кадр видимым consumer'у.
+ *
+ * Активный DMA-слот тоже считается занятым:
+ * его нельзя перезаписывать до DMA TC.
+ */
 void UART_BuildAndSendSyncFrame(void)
 {
     uint32_t start_cyc = DWT->CYCCNT;
-    uint8_t  local_tail;
-    uint8_t  occupied;
+    uint8_t local_tail;
 
     g_uart_build_count++;
 
+    /* Reserve. */
     __disable_irq();
 
-    occupied = (uint8_t)(s_q_count + ((s_dma_active != 0U) ? 1U : 0U));
-
-    if (occupied >= (uint8_t)UART_TX_QUEUE_DEPTH)
+    if (((uint32_t)s_q_count + (uint32_t)s_dma_active) >=
+        UART_TX_QUEUE_DEPTH)
     {
         __enable_irq();
+
         g_uart_drop_count++;
         return;
     }
 
     local_tail = s_q_tail;
-    s_q_tail   = (uint8_t)((s_q_tail + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+
+    s_q_tail = (uint8_t)(
+        (s_q_tail + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
 
     __enable_irq();
 
+    /* Build. */
     UART_BuildPacket(g_uart_tx_queue[local_tail]);
 
+    /* Commit. */
     __disable_irq();
 
     s_q_count++;
-    UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
+
+    UART_Q_ASSERT(
+        s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
 
     g_uart_enqueue_count++;
     g_uart_queue_count = s_q_count;
 
     if (g_uart_queue_count > g_uart_queue_high_watermark)
     {
-        g_uart_queue_high_watermark = g_uart_queue_count;
+        g_uart_queue_high_watermark =
+            g_uart_queue_count;
     }
 
     if (s_dma_active == 0U)
     {
         UART_StartDMAFromBuffer(s_q_head);
 
-        s_q_head = (uint8_t)((s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+        s_q_head = (uint8_t)(
+            (s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+
         s_q_count--;
-        UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
+
+        UART_Q_ASSERT(
+            s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
 
         g_uart_queue_count = s_q_count;
     }
@@ -384,16 +475,21 @@ void UART_BuildAndSendSyncFrame(void)
     __enable_irq();
 
     {
-        uint32_t delta_cyc = DWT->CYCCNT - start_cyc;
-        uint32_t us        = delta_cyc / (SystemCoreClock / 1000000UL);
+        uint32_t delta_cyc =
+            DWT->CYCCNT - start_cyc;
+
+        uint32_t us =
+            delta_cyc / (SystemCoreClock / 1000000UL);
 
         g_uart_build_cyc_last = delta_cyc;
+
         if (delta_cyc > g_uart_build_cyc_max)
         {
             g_uart_build_cyc_max = delta_cyc;
         }
 
         g_uart_build_us_last = us;
+
         if (us > g_uart_build_us_max)
         {
             g_uart_build_us_max = us;
@@ -401,24 +497,29 @@ void UART_BuildAndSendSyncFrame(void)
     }
 }
 
-/* ================================================================
- * Consumer: DMA TC IRQ.
- * Вызывать только из DMA1_Stream1_IRQHandler() после очистки TC flag.
- * ================================================================ */
+/*
+ * Consumer: обработка завершения активной DMA-передачи.
+ * При наличии committed-кадра запускается следующий слот.
+ */
 void UART_DMA_TxComplete(void)
 {
     g_uart_dma_tc_count++;
     s_dma_active = 0U;
 
-    UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
+    UART_Q_ASSERT(
+        s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
 
     if (s_q_count > 0U)
     {
         UART_StartDMAFromBuffer_Fast(s_q_head);
 
-        s_q_head = (uint8_t)((s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+        s_q_head = (uint8_t)(
+            (s_q_head + 1U) % (uint8_t)UART_TX_QUEUE_DEPTH);
+
         s_q_count--;
-        UART_Q_ASSERT(s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
+
+        UART_Q_ASSERT(
+            s_q_count <= (uint8_t)UART_TX_QUEUE_DEPTH);
 
         g_uart_queue_count = s_q_count;
     }

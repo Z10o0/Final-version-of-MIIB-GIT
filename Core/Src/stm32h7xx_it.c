@@ -1,38 +1,45 @@
-/* =============================================================================
- * stm32h7xx_it.c
+/*
+ * MIIB: 36 ICM-45686.
  *
- * Обработчики прерываний MIIB:
- * 36 ICM-45686, SPI1/5/4 + SPI3/2/6 + USART1 DMA TX.
+ * DMA1:
+ * Stream0: USART1 RX, не используется.
+ * Stream1: USART1 TX.
+ * Stream2: SPI1 RX.
+ * Stream3: SPI1 TX.
+ * Stream4: SPI2 RX.
+ * Stream5: SPI2 TX.
+ * Stream6: SPI3 RX.
+ * Stream7: SPI3 TX.
  *
- * DMA-карта:
- *   DMA1 Stream0  — USART1 RX
- *   DMA1 Stream1  — USART1 TX
- *   DMA1 Stream2  — SPI1 RX
- *   DMA1 Stream3  — SPI1 TX
- *   DMA1 Stream4  — SPI2 RX
- *   DMA1 Stream5  — SPI2 TX
- *   DMA1 Stream6  — SPI3 RX
- *   DMA1 Stream7  — SPI3 TX
- *   DMA2 Stream0  — SPI4 RX
- *   DMA2 Stream1  — SPI4 TX
- *   DMA2 Stream2  — SPI5 RX
- *   DMA2 Stream3  — SPI5 TX
- *   BDMA Channel0 — SPI6 RX, D3/SRAM4
- *   BDMA Channel1 — SPI6 TX, D3/SRAM4
+ * DMA2:
+ * Stream0: SPI4 RX.
+ * Stream1: SPI4 TX.
+ * Stream2: SPI5 RX.
+ * Stream3: SPI5 TX.
  *
- * Таймеры:
- *   TIM6 UPDATE — acquisition trigger 400 Гц, период 2,5 мс.
- *   TIM7 UPDATE — watchdog stuck DMA/EOT, 1 кГц.
- * =============================================================================
+ * BDMA:
+ * Channel0: SPI6 RX.
+ * Channel1: SPI6 TX.
+ *
+ * TIM6:
+ * 2.5 мс = 400 Гц = ODR 3200 / 8 raw FIFO-пакетов.
+ * ISR только запускает acquisition.
+ *
+ * TIM7:
+ * watchdog 1 кГц.
+ * NVIC priority ниже SPI/DMA/TIM6.
+ *
+ * Парсинг, усреднение и построение RS-кадра выполняются в main loop.
  */
 
 #include "main.h"
 #include "stm32h7xx_it.h"
+
 #include "icm45686_spi.h"
 #include "uart_telemetry.h"
 
 /* ============================================================================
- * System exception handlers
+ * System handlers
  * ========================================================================== */
 
 void NMI_Handler(void)
@@ -87,14 +94,14 @@ void SysTick_Handler(void)
 }
 
 /* ============================================================================
- * USART1 TX — DMA1 Stream1
+ * USART1 TX: DMA1 Stream1
  * ========================================================================== */
 
 void DMA1_Stream1_IRQHandler(void)
 {
     /*
-     * FIFO mode у DMA1 Stream1 отключён. Возможный FE очищается,
-     * но не учитывается как реальная ошибка передачи.
+     * FE не считается ошибкой для текущего Direct-mode stream.
+     * Флаг очищается, IT_FE не включается в UART_Telemetry_Init().
      */
     if (LL_DMA_IsActiveFlag_FE1(DMA1) != 0U)
     {
@@ -121,9 +128,10 @@ void DMA1_Stream1_IRQHandler(void)
 }
 
 /* ============================================================================
- * SPI1 — DMA1 Stream2 RX, Stream3 TX
+ * Нижняя плата: SPI1 / SPI4 / SPI5
  * ========================================================================== */
 
+/* SPI1 RX. */
 void DMA1_Stream2_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE2(DMA1) != 0U)
@@ -140,6 +148,7 @@ void DMA1_Stream2_IRQHandler(void)
     }
 }
 
+/* SPI1 TX: только сброс флагов. */
 void DMA1_Stream3_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE3(DMA1) != 0U)
@@ -153,10 +162,7 @@ void DMA1_Stream3_IRQHandler(void)
     }
 }
 
-/* ============================================================================
- * SPI4 — DMA2 Stream0 RX, Stream1 TX
- * ========================================================================== */
-
+/* SPI4 RX. */
 void DMA2_Stream0_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE0(DMA2) != 0U)
@@ -173,6 +179,7 @@ void DMA2_Stream0_IRQHandler(void)
     }
 }
 
+/* SPI4 TX: только сброс флагов. */
 void DMA2_Stream1_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE1(DMA2) != 0U)
@@ -186,10 +193,7 @@ void DMA2_Stream1_IRQHandler(void)
     }
 }
 
-/* ============================================================================
- * SPI5 — DMA2 Stream2 RX, Stream3 TX
- * ========================================================================== */
-
+/* SPI5 RX. */
 void DMA2_Stream2_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE2(DMA2) != 0U)
@@ -206,6 +210,7 @@ void DMA2_Stream2_IRQHandler(void)
     }
 }
 
+/* SPI5 TX: только сброс флагов. */
 void DMA2_Stream3_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE3(DMA2) != 0U)
@@ -220,17 +225,15 @@ void DMA2_Stream3_IRQHandler(void)
 }
 
 /* ============================================================================
- * USART1 RX — DMA1 Stream0
+ * Верхняя плата: SPI2 / SPI3 / SPI6
  * ========================================================================== */
 
+/* USART1 RX: не используется. */
 void DMA1_Stream0_IRQHandler(void)
 {
 }
 
-/* ============================================================================
- * SPI2 — DMA1 Stream4 RX, Stream5 TX
- * ========================================================================== */
-
+/* SPI2 RX. */
 void DMA1_Stream4_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE4(DMA1) != 0U)
@@ -247,6 +250,7 @@ void DMA1_Stream4_IRQHandler(void)
     }
 }
 
+/* SPI2 TX: только сброс флагов. */
 void DMA1_Stream5_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE5(DMA1) != 0U)
@@ -260,10 +264,7 @@ void DMA1_Stream5_IRQHandler(void)
     }
 }
 
-/* ============================================================================
- * SPI3 — DMA1 Stream6 RX, Stream7 TX
- * ========================================================================== */
-
+/* SPI3 RX. */
 void DMA1_Stream6_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE6(DMA1) != 0U)
@@ -280,6 +281,7 @@ void DMA1_Stream6_IRQHandler(void)
     }
 }
 
+/* SPI3 TX: только сброс флагов. */
 void DMA1_Stream7_IRQHandler(void)
 {
     if (LL_DMA_IsActiveFlag_TE7(DMA1) != 0U)
@@ -293,10 +295,7 @@ void DMA1_Stream7_IRQHandler(void)
     }
 }
 
-/* ============================================================================
- * SPI6 — BDMA Channel0 RX, Channel1 TX
- * ========================================================================== */
-
+/* SPI6 RX: BDMA, буфер находится в D3/SRAM4. */
 void BDMA_Channel0_IRQHandler(void)
 {
     if (LL_BDMA_IsActiveFlag_TE0(BDMA) != 0U)
@@ -313,6 +312,7 @@ void BDMA_Channel0_IRQHandler(void)
     }
 }
 
+/* SPI6 TX: только сброс флагов. */
 void BDMA_Channel1_IRQHandler(void)
 {
     if (LL_BDMA_IsActiveFlag_TE1(BDMA) != 0U)
@@ -328,9 +328,6 @@ void BDMA_Channel1_IRQHandler(void)
 
 /* ============================================================================
  * SPI EOT handlers
- *
- * DMA RX TC завершает работу DMA, но CS остаётся LOW.
- * CS поднимается только после фактического SPI EOT.
  * ========================================================================== */
 
 void SPI1_IRQHandler(void)
@@ -344,34 +341,6 @@ void SPI1_IRQHandler(void)
     if (LL_SPI_IsActiveFlag_OVR(SPI1) != 0U)
     {
         LL_SPI_ClearFlag_OVR(SPI1);
-    }
-}
-
-void SPI2_IRQHandler(void)
-{
-    if ((LL_SPI_IsEnabledIT_EOT(SPI2) != 0U) &&
-        (LL_SPI_IsActiveFlag_EOT(SPI2) != 0U))
-    {
-        ICM_SPI_Eot_SPI2();
-    }
-
-    if (LL_SPI_IsActiveFlag_OVR(SPI2) != 0U)
-    {
-        LL_SPI_ClearFlag_OVR(SPI2);
-    }
-}
-
-void SPI3_IRQHandler(void)
-{
-    if ((LL_SPI_IsEnabledIT_EOT(SPI3) != 0U) &&
-        (LL_SPI_IsActiveFlag_EOT(SPI3) != 0U))
-    {
-        ICM_SPI_Eot_SPI3();
-    }
-
-    if (LL_SPI_IsActiveFlag_OVR(SPI3) != 0U)
-    {
-        LL_SPI_ClearFlag_OVR(SPI3);
     }
 }
 
@@ -403,6 +372,34 @@ void SPI5_IRQHandler(void)
     }
 }
 
+void SPI2_IRQHandler(void)
+{
+    if ((LL_SPI_IsEnabledIT_EOT(SPI2) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI2) != 0U))
+    {
+        ICM_SPI_Eot_SPI2();
+    }
+
+    if (LL_SPI_IsActiveFlag_OVR(SPI2) != 0U)
+    {
+        LL_SPI_ClearFlag_OVR(SPI2);
+    }
+}
+
+void SPI3_IRQHandler(void)
+{
+    if ((LL_SPI_IsEnabledIT_EOT(SPI3) != 0U) &&
+        (LL_SPI_IsActiveFlag_EOT(SPI3) != 0U))
+    {
+        ICM_SPI_Eot_SPI3();
+    }
+
+    if (LL_SPI_IsActiveFlag_OVR(SPI3) != 0U)
+    {
+        LL_SPI_ClearFlag_OVR(SPI3);
+    }
+}
+
 void SPI6_IRQHandler(void)
 {
     if ((LL_SPI_IsEnabledIT_EOT(SPI6) != 0U) &&
@@ -418,13 +415,12 @@ void SPI6_IRQHandler(void)
 }
 
 /* ============================================================================
- * TIM6 — acquisition trigger
+ * TIM6: acquisition 400 Гц
  *
- * TIM6CLK = 275 МГц:
- * PSC=274, ARR=2499 -> 400 Гц -> период 2,5 мс.
+ * PSC=274, ARR=2499 при TIM6CLK=275 МГц.
+ * Период 2.5 мс.
  *
- * Один tick запускает чтение восьми FIFO-пакетов каждого датчика.
- * Парсинг, усреднение и UART выполняются в main loop.
+ * Парсер, усреднение и построение RS-кадра здесь не выполняются.
  * ========================================================================== */
 
 void TIM6_DAC_IRQHandler(void)
@@ -437,12 +433,10 @@ void TIM6_DAC_IRQHandler(void)
 }
 
 /* ============================================================================
- * TIM7 — watchdog stuck DMA/EOT
+ * TIM7: watchdog 1 кГц
  *
- * TIM7CLK = 275 МГц:
- * PSC=274, ARR=999 -> 1 кГц.
- *
- * Приоритет TIM7 ниже приоритета SPI/DMA/TIM6.
+ * PSC=274, ARR=999 при TIM7CLK=275 МГц.
+ * NVIC priority ниже SPI/DMA/TIM6.
  * ========================================================================== */
 
 void TIM7_IRQHandler(void)

@@ -1,3 +1,6 @@
-../Core/Src/icm45686_data.c:72:23:build20	1
-../Core/Src/icm45686_data.c:89:6:ICM_ParseFIFOBuffer	6
-../Core/Src/icm45686_data.c:186:6:ICM_ParseAllFIFO	7
+../Core/Src/icm45686_data.c:43:23:build20	1
+../Core/Src/icm45686_data.c:60:6:ICM_ParseFIFOBuffer	6
+../Core/Src/icm45686_data.c:147:6:ICM_ParseAllFIFO	7
+../Core/Src/icm45686_data.c:210:16:div_round_s64	3
+../Core/Src/icm45686_data.c:227:16:div_round_temp	3
+../Core/Src/icm45686_data.c:253:6:ICM_AverageAllBatches	6
