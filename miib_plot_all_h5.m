@@ -1,7 +1,7 @@
 %% ===================== НАСТРОЙКИ РАСЧЕТА =====================
 clear; clc; close all;
 
-h5FilePath   = 'miib_raw_20260831_142519.h5'; % Имя HDF5-файла
+h5FilePath   = 'miib_raw_20261002_091403.h5'; % Имя HDF5-файла
 ptsPerDecade = 45;                     % Академическая плотность (45 точек на декаду)
 
 if ~exist(h5FilePath, 'file')

@@ -12,7 +12,7 @@ import numba as nb
 from numba import prange
 
 # ===================== 1. НАСТРОЙКИ ЭКСПЕРИМЕНТА =====================
-H5_FILE_PATH   = 'miib_data_single_12h.h5'   # Имя HDF5-файла
+H5_FILE_PATH   = 'miib_raw_20261002_091403.h5'   # Имя HDF5-файла
 PTS_PER_DECADE = 45                          # Академическая плотность сетки tau
 
 if not os.path.exists(H5_FILE_PATH):

@@ -1,8 +1,8 @@
 %% ===================== НАСТРОЙКИ СКРИПТА =====================
 clear; clc; close all;
 
-binFilePath      = 'miib_raw_20260831_142519.bin';
-outputH5Path     = 'miib_data_calib_temp_2h.h5';
+binFilePath      = 'miib_raw_20261002_091403.bin';
+outputH5Path     = 'miib_raw_20261002_091403.h5';
 chunkMb          = 500;                             % Размер порции чтения в ОЗУ (МБ)
 
 %% ===================== ПОДГОТОВКА ФАЙЛА =====================
